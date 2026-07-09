@@ -18,9 +18,11 @@ import {
   Grid,
   List,
   Copy,
-  Check
+  Check,
+  QrCode
 } from "lucide-react";
 import { SharedFile, SortField } from "../types";
+import QrModal from "./QrModal";
 
 interface FileGridProps {
   files: SharedFile[];
@@ -49,6 +51,7 @@ export default function FileGrid({
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeQrFile, setActiveQrFile] = useState<SharedFile | null>(null);
 
   // Keep current time updated every second for countdowns
   useEffect(() => {
@@ -400,7 +403,7 @@ export default function FileGrid({
                       </div>
 
                       {/* Bottom Quick-Action Panel */}
-                      <div className="grid grid-cols-4 gap-1.5 mt-auto">
+                      <div className="grid grid-cols-5 gap-1.5 mt-auto">
                         <button
                           id={`preview-btn-${file.id}`}
                           onClick={() => onPreview(file)}
@@ -416,6 +419,14 @@ export default function FileGrid({
                           title="Download File"
                         >
                           <Download className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          id={`qr-btn-${file.id}`}
+                          onClick={() => setActiveQrFile(file)}
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all text-[11px] font-semibold cursor-pointer"
+                          title="Share QR Code"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
                         </button>
                         <button
                           id={`copy-btn-${file.id}`}
@@ -514,6 +525,14 @@ export default function FileGrid({
                             <Download className="w-3.5 h-3.5" />
                           </button>
                           <button
+                            id={`row-qr-btn-${file.id}`}
+                            onClick={() => setActiveQrFile(file)}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
+                            title="Share QR Code"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                          </button>
+                          <button
                             id={`row-copy-btn-${file.id}`}
                             onClick={(e) => handleCopyLink(file, e)}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer relative"
@@ -547,6 +566,15 @@ export default function FileGrid({
             )}
           </AnimatePresence>
         </div>
+      )}
+
+      {/* Share QR Code Modal Overlay */}
+      {activeQrFile && (
+        <QrModal
+          file={activeQrFile}
+          onClose={() => setActiveQrFile(null)}
+          addToast={addToast}
+        />
       )}
     </div>
   );

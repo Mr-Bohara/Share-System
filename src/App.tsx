@@ -219,7 +219,7 @@ export default function App() {
 
     setActiveUploads((prev) => [newUpload, ...prev]);
 
-    // Attach listeners
+    // Attach progress listener
     uploadTask.on(
       "state_changed",
       (snapshot) => {
@@ -227,63 +227,62 @@ export default function App() {
         setActiveUploads((prev) =>
           prev.map((u) => (u.id === uploadId ? { ...u, progress } : u))
         );
-      },
-      (error) => {
-        const isCancelled = error.code === "storage/canceled";
+      }
+    );
+
+    // Sequence-aware async execution flow to prevent stalled uploads or race conditions
+    (async () => {
+      try {
+        // 1. Await the complete upload task (Firebase Storage upload)
+        const snapshot = await uploadTask;
+        
+        // 2. Fetch download URL once uploaded
+        const downloadUrl = await getDownloadURL(snapshot.ref);
+        const uploadedAt = Date.now();
+        const expiresAt = uploadedAt + 3600000; // exactly 1 hour expiry
+
+        // 3. Save metadata doc in Firestore
+        await setDoc(doc(db, "files", uploadId), {
+          filename: file.name,
+          storagePath: storagePath,
+          downloadUrl: downloadUrl,
+          uploadedAt: uploadedAt,
+          expiresAt: expiresAt,
+          size: file.size,
+          mimeType: file.type || "application/octet-stream",
+          uploaderUid: user.uid,
+        });
+
+        // 4. Update the tracker to completed in a single batched state update
+        setActiveUploads((prev) =>
+          prev.map((u) =>
+            u.id === uploadId ? { ...u, status: "completed", progress: 100 } : u
+          )
+        );
+
+        addToast(`Successfully shared "${file.name}"!`, "success");
+      } catch (err: any) {
+        // Detect cancellation versus an actual transfer/firestore error
+        const isCancelled = err.code === "storage/canceled";
+        
         setActiveUploads((prev) =>
           prev.map((u) =>
             u.id === uploadId
               ? {
                   ...u,
                   status: isCancelled ? "cancelled" : "failed",
-                  error: isCancelled ? "Upload cancelled" : error.message,
+                  error: isCancelled ? "Upload cancelled" : err.message,
                 }
               : u
           )
         );
-        
+
         if (!isCancelled) {
+          console.error("Parallel/sequence upload failure:", err);
           addToast(`Upload failed for "${file.name}"`, "error");
         }
-      },
-      async () => {
-        // Completion handle
-        try {
-          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-          const uploadedAt = Date.now();
-          const expiresAt = uploadedAt + 3600000; // exactly 1 hour expiry
-
-          // Store metadata inside Firestore
-          await setDoc(doc(db, "files", uploadId), {
-            filename: file.name,
-            storagePath: storagePath,
-            downloadUrl: downloadUrl,
-            uploadedAt: uploadedAt,
-            expiresAt: expiresAt,
-            size: file.size,
-            mimeType: file.type || "application/octet-stream",
-            uploaderUid: user.uid,
-          });
-
-          // Mark tracker as completed
-          setActiveUploads((prev) =>
-            prev.map((u) =>
-              u.id === uploadId ? { ...u, status: "completed", progress: 100 } : u
-            )
-          );
-
-          addToast(`Successfully shared "${file.name}"!`, "success");
-        } catch (err: any) {
-          console.error("Metadata upload failed:", err);
-          setActiveUploads((prev) =>
-            prev.map((u) =>
-              u.id === uploadId ? { ...u, status: "failed", error: err.message } : u
-            )
-          );
-          addToast(`Failed to publish "${file.name}".`, "error");
-        }
       }
-    );
+    })();
   };
 
   // Clear completed uploads from tracker
