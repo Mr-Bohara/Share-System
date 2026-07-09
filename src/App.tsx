@@ -186,13 +186,19 @@ export default function App() {
   const startFileUpload = (file: File, uploadId: string) => {
     if (!user) return;
 
+    console.debug(`[UploadLifecycle:${uploadId}] Initializing startFileUpload. File: ${file.name}, Size: ${file.size} bytes.`);
+
     // Create unique storage path
     // Format: uploads/fileId/filename
     const storagePath = `uploads/${uploadId}/${file.name}`;
     const storageRef = ref(storage, storagePath);
 
+    // Track states of current file's pipelines independently to prevent race conditions or infinite cancellation loops
+    let fallbackXhr: XMLHttpRequest | null = null;
+    let primaryCompletedOrCancelled = false;
+    let fallbackCompletedOrCancelled = false;
+
     // Setup resumable upload task
-    // We attach uploaderUid to object customMetadata for Storage Security Rules verification
     const uploadTask = uploadBytesResumable(storageRef, file, {
       customMetadata: {
         uploaderUid: user.uid,
@@ -208,9 +214,29 @@ export default function App() {
       status: "uploading",
       file: file,
       cancel: () => {
-        uploadTask.cancel();
+        console.debug(`[UploadLifecycle:${uploadId}] Manual cancellation triggered via UI/cancel button.`);
+        primaryCompletedOrCancelled = true;
+        fallbackCompletedOrCancelled = true;
+        try {
+          console.debug(`[UploadLifecycle:${uploadId}] Calling uploadTask.cancel() from UI cancellation.`);
+          uploadTask.cancel();
+        } catch (e) {
+          console.debug(`[UploadLifecycle:${uploadId}] Error during uploadTask.cancel():`, e);
+        }
+        if (fallbackXhr) {
+          try {
+            console.debug(`[UploadLifecycle:${uploadId}] Aborting active fallback XHR request.`);
+            fallbackXhr.abort();
+          } catch (e) {
+            console.debug(`[UploadLifecycle:${uploadId}] Error during fallbackXhr.abort():`, e);
+          }
+        }
+        setActiveUploads((prev) =>
+          prev.map((u) => (u.id === uploadId ? { ...u, status: "cancelled", error: "Upload cancelled" } : u))
+        );
       },
       retry: () => {
+        console.debug(`[UploadLifecycle:${uploadId}] Retry triggered. Resetting active list and restarting...`);
         // Retry logic: clear from active uploads list and start fresh
         setActiveUploads((prev) => prev.filter((u) => u.id !== uploadId));
         startFileUpload(file, uploadId);
@@ -219,32 +245,152 @@ export default function App() {
 
     setActiveUploads((prev) => [newUpload, ...prev]);
 
-    // Attach progress listener
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        setActiveUploads((prev) =>
-          prev.map((u) => (u.id === uploadId ? { ...u, progress } : u))
-        );
+    let progressTimeout: NodeJS.Timeout | null = null;
+    let hasProgressed = false;
+
+    // Fast third-party pipeline 1: tmpfiles.org (high-speed, CORS-compliant)
+    const startFallbackUpload = async () => {
+      console.debug(`[UploadLifecycle:${uploadId}] startFallbackUpload() called. fallbackCompletedOrCancelled: ${fallbackCompletedOrCancelled}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+      if (fallbackCompletedOrCancelled) {
+        console.debug(`[UploadLifecycle:${uploadId}] Fallback already completed or cancelled. Skipping startFallbackUpload.`);
+        return;
       }
-    );
+      primaryCompletedOrCancelled = true; // Mark primary as done/skipped to prevent overlapping error handling
+      console.info(`[FastUpload] Switching to tmpfiles.org fallback pipeline for "${file.name}"...`);
 
-    // Sequence-aware async execution flow to prevent stalled uploads or race conditions
-    (async () => {
       try {
-        // 1. Await the complete upload task (Firebase Storage upload)
-        const snapshot = await uploadTask;
-        
-        // 2. Fetch download URL once uploaded
-        const downloadUrl = await getDownloadURL(snapshot.ref);
-        const uploadedAt = Date.now();
-        const expiresAt = uploadedAt + 3600000; // exactly 1 hour expiry
+        // Cancel primary upload since we've initiated fallback
+        try {
+          console.debug(`[UploadLifecycle:${uploadId}] Calling uploadTask.cancel() from startFallbackUpload to switch pipeline.`);
+          uploadTask.cancel();
+        } catch (e) {
+          console.debug(`[UploadLifecycle:${uploadId}] Error during uploadTask.cancel() in startFallbackUpload:`, e);
+        }
 
-        // 3. Save metadata doc in Firestore
+        const formData = new FormData();
+        formData.append("file", file);
+
+        fallbackXhr = new XMLHttpRequest();
+        fallbackXhr.open("POST", "https://tmpfiles.org/api/v1/upload", true);
+
+        // Track local upload progress
+        fallbackXhr.upload.addEventListener("progress", (event) => {
+          if (fallbackCompletedOrCancelled) return;
+          if (event.lengthComputable) {
+            const progress = Math.round((event.loaded / event.total) * 100);
+            console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles progress: ${progress}%`);
+            setActiveUploads((prev) =>
+              prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(progress, 99) } : u))
+            );
+          }
+        });
+
+        fallbackXhr.addEventListener("load", async () => {
+          console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles XHR onload. Status: ${fallbackXhr?.status}`);
+          if (fallbackCompletedOrCancelled) return;
+          if (fallbackXhr && fallbackXhr.status >= 200 && fallbackXhr.status < 300) {
+            try {
+              const response = JSON.parse(fallbackXhr.responseText);
+              console.debug(`[UploadLifecycle:${uploadId}] tmpfiles response:`, response);
+              if (response.status === "success" && response.data && response.data.url) {
+                const directUrl = response.data.url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
+                await saveMetadataAndComplete(directUrl, "alternative-tmpfiles");
+                return;
+              }
+            } catch (e) {
+              console.debug(`[UploadLifecycle:${uploadId}] Failed to parse tmpfiles response:`, e);
+            }
+          }
+          await uploadToFileIo();
+        });
+
+        fallbackXhr.addEventListener("error", async () => {
+          console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles XHR onerror.`);
+          if (fallbackCompletedOrCancelled) return;
+          await uploadToFileIo();
+        });
+
+        fallbackXhr.send(formData);
+      } catch (err) {
+        console.debug(`[UploadLifecycle:${uploadId}] Exception in startFallbackUpload:`, err);
+        await uploadToFileIo();
+      }
+    };
+
+    // Fast third-party pipeline 2: file.io (robust fallback, CORS-compliant)
+    const uploadToFileIo = async () => {
+      console.debug(`[UploadLifecycle:${uploadId}] uploadToFileIo() called. fallbackCompletedOrCancelled: ${fallbackCompletedOrCancelled}`);
+      if (fallbackCompletedOrCancelled) {
+        console.debug(`[UploadLifecycle:${uploadId}] Fallback already completed or cancelled in file.io. Skipping uploadToFileIo.`);
+        return;
+      }
+      console.info(`[FastUpload] Switching to file.io fallback pipeline for "${file.name}"...`);
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        fallbackXhr = new XMLHttpRequest();
+        fallbackXhr.open("POST", "https://file.io/?expires=1d", true);
+
+        fallbackXhr.upload.addEventListener("progress", (event) => {
+          if (fallbackCompletedOrCancelled) return;
+          if (event.lengthComputable) {
+            const progress = Math.round((event.loaded / event.total) * 100);
+            console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io progress: ${progress}%`);
+            setActiveUploads((prev) =>
+              prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(progress, 99) } : u))
+            );
+          }
+        });
+
+        fallbackXhr.addEventListener("load", async () => {
+          console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io XHR onload. Status: ${fallbackXhr?.status}`);
+          if (fallbackCompletedOrCancelled) return;
+          if (fallbackXhr && fallbackXhr.status >= 200 && fallbackXhr.status < 300) {
+            try {
+              const response = JSON.parse(fallbackXhr.responseText);
+              console.debug(`[UploadLifecycle:${uploadId}] file.io response:`, response);
+              if (response.success && response.link) {
+                await saveMetadataAndComplete(response.link, "alternative-fileio");
+                return;
+              }
+            } catch (e) {
+              console.debug(`[UploadLifecycle:${uploadId}] Failed to parse file.io response:`, e);
+            }
+          }
+          handleUploadError(new Error("All storage pipelines exhausted."));
+        });
+
+        fallbackXhr.addEventListener("error", () => {
+          console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io XHR onerror.`);
+          handleUploadError(new Error("Network connection lost during upload."));
+        });
+
+        fallbackXhr.send(formData);
+      } catch (e: any) {
+        console.debug(`[UploadLifecycle:${uploadId}] Exception in uploadToFileIo:`, e);
+        handleUploadError(e);
+      }
+    };
+
+    // Saves file document to shared index inside Firestore
+    const saveMetadataAndComplete = async (downloadUrl: string, method: string) => {
+      console.debug(`[UploadLifecycle:${uploadId}] saveMetadataAndComplete() called. Method: ${method}, downloadUrl: ${downloadUrl}`);
+      if (fallbackCompletedOrCancelled && method !== "primary") {
+        console.debug(`[UploadLifecycle:${uploadId}] saveMetadataAndComplete ignored because fallback already completed or cancelled.`);
+        return;
+      }
+      primaryCompletedOrCancelled = true;
+      fallbackCompletedOrCancelled = true;
+
+      const uploadedAt = Date.now();
+      const expiresAt = uploadedAt + 3600000; // exactly 1 hour expiry
+
+      try {
         await setDoc(doc(db, "files", uploadId), {
           filename: file.name,
-          storagePath: storagePath,
+          storagePath: method.startsWith("alternative") ? `alternative/${uploadId}/${file.name}` : storagePath,
           downloadUrl: downloadUrl,
           uploadedAt: uploadedAt,
           expiresAt: expiresAt,
@@ -253,7 +399,7 @@ export default function App() {
           uploaderUid: user.uid,
         });
 
-        // 4. Update the tracker to completed in a single batched state update
+        // Mark tracker as completed
         setActiveUploads((prev) =>
           prev.map((u) =>
             u.id === uploadId ? { ...u, status: "completed", progress: 100 } : u
@@ -262,25 +408,100 @@ export default function App() {
 
         addToast(`Successfully shared "${file.name}"!`, "success");
       } catch (err: any) {
-        // Detect cancellation versus an actual transfer/firestore error
-        const isCancelled = err.code === "storage/canceled";
-        
-        setActiveUploads((prev) =>
-          prev.map((u) =>
-            u.id === uploadId
-              ? {
-                  ...u,
-                  status: isCancelled ? "cancelled" : "failed",
-                  error: isCancelled ? "Upload cancelled" : err.message,
-                }
-              : u
-          )
-        );
+        console.error("Firestore indexing failed:", err);
+        handleUploadError(err);
+      }
+    };
 
-        if (!isCancelled) {
-          console.error("Parallel/sequence upload failure:", err);
-          addToast(`Upload failed for "${file.name}"`, "error");
+    const handleUploadError = (err: any) => {
+      console.debug(`[UploadLifecycle:${uploadId}] handleUploadError() called. Error:`, err, `fallbackCompletedOrCancelled: ${fallbackCompletedOrCancelled}`);
+      if (fallbackCompletedOrCancelled) {
+        console.debug(`[UploadLifecycle:${uploadId}] handleUploadError ignored because fallback already completed/cancelled.`);
+        return;
+      }
+      primaryCompletedOrCancelled = true;
+      fallbackCompletedOrCancelled = true;
+
+      setActiveUploads((prev) =>
+        prev.map((u) =>
+          u.id === uploadId
+            ? {
+                ...u,
+                status: "failed",
+                error: err.message || "Upload failed",
+              }
+            : u
+        )
+      );
+      addToast(`Upload failed for "${file.name}"`, "error");
+    };
+
+    // Listen to primary Firebase Storage state changes
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        console.debug(`[UploadLifecycle:${uploadId}] uploadTask state_changed: Transferred ${snapshot.bytesTransferred}/${snapshot.totalBytes} (${progress.toFixed(2)}%). primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+        if (primaryCompletedOrCancelled) return;
+        if (progress > 0) {
+          hasProgressed = true;
+          if (progressTimeout) {
+            console.debug(`[UploadLifecycle:${uploadId}] Progress detected (>0%). Clearing progressTimeout.`);
+            clearTimeout(progressTimeout);
+            progressTimeout = null;
+          }
         }
+        setActiveUploads((prev) =>
+          prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(Math.round(progress), 99) } : u))
+        );
+      }
+    );
+
+    // Timeout: If upload is stuck at 0% for more than 10.0 seconds, instantly engage fast fallback.
+    // This allows sufficient connection time while safeguarding against disabled Storage instances.
+    console.debug(`[UploadLifecycle:${uploadId}] Setting progressTimeout for 10 seconds.`);
+    progressTimeout = setTimeout(() => {
+      console.debug(`[UploadLifecycle:${uploadId}] progressTimeout triggered after 10s. hasProgressed: ${hasProgressed}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+      if (!hasProgressed && !primaryCompletedOrCancelled) {
+        console.info(`[FastUpload] 10s timeout reached without progress. Transitioning...`);
+        startFallbackUpload();
+      }
+    }, 10000);
+
+    // Sequence-aware async execution flow
+    (async () => {
+      console.debug(`[UploadLifecycle:${uploadId}] Entering async execution flow (awaiting uploadTask)...`);
+      try {
+        const snapshot = await uploadTask;
+        console.debug(`[UploadLifecycle:${uploadId}] uploadTask Promise resolved successfully. Ref: ${snapshot.ref?.fullPath}`);
+        if (primaryCompletedOrCancelled) {
+          console.debug(`[UploadLifecycle:${uploadId}] uploadTask completed but primaryCompletedOrCancelled is true. Skipping completion.`);
+          return;
+        }
+        
+        if (progressTimeout) {
+          console.debug(`[UploadLifecycle:${uploadId}] Clearing progress timeout on successful primary upload completion.`);
+          clearTimeout(progressTimeout);
+        }
+
+        const downloadUrl = await getDownloadURL(snapshot.ref);
+        console.debug(`[UploadLifecycle:${uploadId}] Fetched downloadURL from primary storage. Completing metadata document...`);
+        await saveMetadataAndComplete(downloadUrl, "primary");
+      } catch (err: any) {
+        console.debug(`[UploadLifecycle:${uploadId}] catch block hit. Error:`, err, `primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+        if (primaryCompletedOrCancelled) {
+          console.debug(`[UploadLifecycle:${uploadId}] catch block ignored because primaryCompletedOrCancelled is true.`);
+          return;
+        }
+
+        if (progressTimeout) {
+          console.debug(`[UploadLifecycle:${uploadId}] Clearing progress timeout on error.`);
+          clearTimeout(progressTimeout);
+        }
+
+        // If Firebase Storage rejects/cancels, instantly start fallback
+        console.warn("Primary storage upload was stopped/rejected. Transitioning to fallback...", err);
+        startFallbackUpload();
       }
     })();
   };
