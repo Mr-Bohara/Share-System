@@ -165,6 +165,54 @@ export default function App() {
     return () => unsubscribeSnapshot();
   }, [user]);
 
+  // 4.5. Text share processor
+  const handleShareText = async (text: string, customTitle?: string) => {
+    if (!user) {
+      addToast("Connection offline. Please wait.", "error");
+      return;
+    }
+
+    if (!text.trim()) {
+      addToast("Please enter some text to share.", "error");
+      return;
+    }
+
+    const uploadId = crypto.randomUUID();
+    const uploadedAt = Date.now();
+    const expiresAt = uploadedAt + 14400000; // exactly 4 hours expiry
+
+    // If no custom title is specified, name it "Text-Share-[id].txt"
+    const title = customTitle?.trim() || `Text-Share-${uploadId.substring(0, 8)}.txt`;
+    const filename = title.endsWith(".txt") ? title : `${title}.txt`;
+
+    // Calculate byte size of text content
+    const encoder = new TextEncoder();
+    const byteSize = encoder.encode(text).length;
+
+    // We can generate a standard data URI so it behaves like a normal file for downloads
+    const downloadUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`;
+
+    try {
+      await setDoc(doc(db, "files", uploadId), {
+        filename: filename,
+        storagePath: `text/${uploadId}`,
+        downloadUrl: downloadUrl,
+        uploadedAt: uploadedAt,
+        expiresAt: expiresAt,
+        size: byteSize,
+        mimeType: "text/plain",
+        uploaderUid: user.uid,
+        isText: true,
+        textContent: text,
+      });
+
+      addToast(`Successfully shared text note "${filename}"!`, "success");
+    } catch (err: any) {
+      console.error("Text share failed:", err);
+      addToast("Failed to share text.", "error");
+    }
+  };
+
   // 4. File upload processor
   const handleFilesSelected = (selectedFiles: FileList) => {
     if (!user) {
@@ -190,6 +238,9 @@ export default function App() {
     if (!user) return;
 
     console.debug(`[UploadLifecycle:${uploadId}] Initializing startFileUpload. File: ${file.name}, Size: ${file.size} bytes.`);
+
+    // Determine if file is large (>= 100MB) where fallback uploads are guaranteed to fail due to API limits
+    const IS_LARGE_FILE = file.size >= 100 * 1024 * 1024;
 
     // Create unique storage path
     // Format: uploads/fileId/filename
@@ -276,15 +327,20 @@ export default function App() {
         fallbackXhr = new XMLHttpRequest();
         fallbackXhr.open("POST", "https://tmpfiles.org/api/v1/upload", true);
 
-        // Track local upload progress
+        // Track local upload progress with integer-based throttling
+        let lastFallbackProgress = 0;
         fallbackXhr.upload.addEventListener("progress", (event) => {
           if (fallbackCompletedOrCancelled) return;
           if (event.lengthComputable) {
             const progress = Math.round((event.loaded / event.total) * 100);
+            const roundedProgress = Math.min(progress, 99);
             console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles progress: ${progress}%`);
-            setActiveUploads((prev) =>
-              prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(progress, 99) } : u))
-            );
+            if (roundedProgress > lastFallbackProgress) {
+              lastFallbackProgress = roundedProgress;
+              setActiveUploads((prev) =>
+                prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
+              );
+            }
           }
         });
 
@@ -336,14 +392,20 @@ export default function App() {
         fallbackXhr = new XMLHttpRequest();
         fallbackXhr.open("POST", "https://file.io/?expires=1d", true);
 
+        // Track local upload progress with integer-based throttling
+        let lastFileIoProgress = 0;
         fallbackXhr.upload.addEventListener("progress", (event) => {
           if (fallbackCompletedOrCancelled) return;
           if (event.lengthComputable) {
             const progress = Math.round((event.loaded / event.total) * 100);
+            const roundedProgress = Math.min(progress, 99);
             console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io progress: ${progress}%`);
-            setActiveUploads((prev) =>
-              prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(progress, 99) } : u))
-            );
+            if (roundedProgress > lastFileIoProgress) {
+              lastFileIoProgress = roundedProgress;
+              setActiveUploads((prev) =>
+                prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
+              );
+            }
           }
         });
 
@@ -388,7 +450,7 @@ export default function App() {
       fallbackCompletedOrCancelled = true;
 
       const uploadedAt = Date.now();
-      const expiresAt = uploadedAt + 3600000; // exactly 1 hour expiry
+      const expiresAt = uploadedAt + 14400000; // exactly 4 hours expiry
 
       try {
         await setDoc(doc(db, "files", uploadId), {
@@ -440,10 +502,13 @@ export default function App() {
     };
 
     // Listen to primary Firebase Storage state changes
+    let lastProgress = 0;
     uploadTask.on(
       "state_changed",
       (snapshot) => {
         const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        const roundedProgress = Math.min(Math.round(progress), 99);
+        
         console.debug(`[UploadLifecycle:${uploadId}] uploadTask state_changed: Transferred ${snapshot.bytesTransferred}/${snapshot.totalBytes} (${progress.toFixed(2)}%). primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
         if (primaryCompletedOrCancelled) return;
         if (progress > 0) {
@@ -454,22 +519,32 @@ export default function App() {
             progressTimeout = null;
           }
         }
-        setActiveUploads((prev) =>
-          prev.map((u) => (u.id === uploadId ? { ...u, progress: Math.min(Math.round(progress), 99) } : u))
-        );
+        
+        // Throttling: Only trigger React state update if the integer value has increased.
+        // This prevents freezing the main browser thread on large file transfers.
+        if (roundedProgress > lastProgress) {
+          lastProgress = roundedProgress;
+          setActiveUploads((prev) =>
+            prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
+          );
+        }
       }
     );
 
-    // Timeout: If upload is stuck at 0% for more than 10.0 seconds, instantly engage fast fallback.
-    // This allows sufficient connection time while safeguarding against disabled Storage instances.
-    console.debug(`[UploadLifecycle:${uploadId}] Setting progressTimeout for 10 seconds.`);
-    progressTimeout = setTimeout(() => {
-      console.debug(`[UploadLifecycle:${uploadId}] progressTimeout triggered after 10s. hasProgressed: ${hasProgressed}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
-      if (!hasProgressed && !primaryCompletedOrCancelled) {
-        console.info(`[FastUpload] 10s timeout reached without progress. Transitioning...`);
-        startFallbackUpload();
-      }
-    }, 10000);
+    // Timeout: Only configure fallback timeout for files < 100MB.
+    // Large files take time to negotiate connections and will crash the external API fallbacks.
+    if (!IS_LARGE_FILE) {
+      console.debug(`[UploadLifecycle:${uploadId}] Setting progressTimeout for 10 seconds.`);
+      progressTimeout = setTimeout(() => {
+        console.debug(`[UploadLifecycle:${uploadId}] progressTimeout triggered after 10s. hasProgressed: ${hasProgressed}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+        if (!hasProgressed && !primaryCompletedOrCancelled) {
+          console.info(`[FastUpload] 10s timeout reached without progress. Transitioning to fallback...`);
+          startFallbackUpload();
+        }
+      }, 10000);
+    } else {
+      console.debug(`[UploadLifecycle:${uploadId}] Large file detected (${(file.size / 1024 / 1024).toFixed(1)}MB). Timeout-based fallback disabled.`);
+    }
 
     // Sequence-aware async execution flow
     (async () => {
@@ -502,9 +577,15 @@ export default function App() {
           clearTimeout(progressTimeout);
         }
 
-        // If Firebase Storage rejects/cancels, instantly start fallback
-        console.warn("Primary storage upload was stopped/rejected. Transitioning to fallback...", err);
-        startFallbackUpload();
+        // If file is large, do NOT trigger fallback because other services cannot handle large files
+        if (IS_LARGE_FILE) {
+          console.error("Primary storage upload failed for large file:", err);
+          handleUploadError(err);
+        } else {
+          // If Firebase Storage rejects/cancels, instantly start fallback for smaller files
+          console.warn("Primary storage upload was stopped/rejected. Transitioning to fallback...", err);
+          startFallbackUpload();
+        }
       }
     })();
   };
@@ -528,7 +609,7 @@ export default function App() {
     const deletePromises = files.map(async (file) => {
       try {
         // 1. Delete from Firebase Storage if path is defined and is a real firebase storage file
-        if (file.storagePath && !file.storagePath.startsWith("alternative")) {
+        if (file.storagePath && !file.storagePath.startsWith("alternative") && !file.isText) {
           const storageRef = ref(storage, file.storagePath);
           await deleteObject(storageRef).catch((storageErr: any) => {
             console.warn(`[Purge] Storage file deletion bypassed/ignored: ${file.storagePath}`, storageErr);
@@ -568,7 +649,7 @@ export default function App() {
 
     try {
       // 1. Purge from Firebase Storage if it is a real storage file
-      if (file.storagePath && !file.storagePath.startsWith("alternative")) {
+      if (file.storagePath && !file.storagePath.startsWith("alternative") && !file.isText) {
         const storageRef = ref(storage, file.storagePath);
         try {
           await deleteObject(storageRef);
@@ -598,8 +679,10 @@ export default function App() {
     // If not, we just let Firestore Scheduled functions do it or another peer client uploader can.
     // This reduces load and respects Firestore Rules.
     try {
-      const storageRef = ref(storage, file.storagePath);
-      await deleteObject(storageRef).catch(() => {});
+      if (!file.isText) {
+        const storageRef = ref(storage, file.storagePath);
+        await deleteObject(storageRef).catch(() => {});
+      }
     } catch (e) {}
 
     try {
@@ -699,7 +782,7 @@ export default function App() {
                     Strict Expiration Policy
                   </h4>
                   <p className="text-[10px] text-indigo-600/95 dark:text-indigo-400 leading-normal">
-                    Every uploaded file is stored temporarily and deleted automatically after exactly **1 hour**. Deleted files are completely wiped and cannot be recovered.
+                    Every shared file or text note is stored temporarily and deleted automatically after exactly **4 hours**. Anyone can view or manually delete shared items at any time.
                   </p>
                 </div>
               </div>
@@ -709,6 +792,7 @@ export default function App() {
                 activeUploads={activeUploads}
                 onFilesSelected={handleFilesSelected}
                 onClearCompletedUploads={handleClearCompletedUploads}
+                onShareText={handleShareText}
               />
 
               {/* Stats overview */}

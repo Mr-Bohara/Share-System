@@ -8,6 +8,8 @@ export interface SharedFile {
   size: number;
   mimeType: string;
   uploaderUid: string;
+  isText?: boolean;
+  textContent?: string;
 }
 
 export interface ActiveUpload {

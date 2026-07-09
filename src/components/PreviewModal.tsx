@@ -15,18 +15,25 @@ export default function PreviewModal({ file, onClose, onDownload }: PreviewModal
   const [textError, setTextError] = useState<boolean>(false);
 
   // Determine file categories from mimeType or extension
-  const isImage = file?.mimeType.startsWith("image/");
-  const isVideo = file?.mimeType.startsWith("video/");
-  const isAudio = file?.mimeType.startsWith("audio/");
-  const isPDF = file?.mimeType === "application/pdf" || file?.filename.toLowerCase().endsWith(".pdf");
+  const isImage = file?.mimeType.startsWith("image/") && !file?.isText;
+  const isVideo = file?.mimeType.startsWith("video/") && !file?.isText;
+  const isAudio = file?.mimeType.startsWith("audio/") && !file?.isText;
+  const isPDF = (file?.mimeType === "application/pdf" || file?.filename.toLowerCase().endsWith(".pdf")) && !file?.isText;
   
   const textExtensions = [".txt", ".js", ".ts", ".tsx", ".json", ".html", ".css", ".md", ".xml", ".csv", ".yml", ".yaml"];
-  const isText = file?.mimeType.startsWith("text/") || 
+  const isText = file?.isText ||
+                 file?.mimeType.startsWith("text/") || 
                  (file && textExtensions.some(ext => file.filename.toLowerCase().endsWith(ext))) ||
                  file?.mimeType === "application/json";
 
   useEffect(() => {
     if (file && isText) {
+      if (file.isText && file.textContent !== undefined) {
+        setTextContent(file.textContent);
+        setLoadingText(false);
+        setTextError(false);
+        return;
+      }
       setLoadingText(true);
       setTextError(false);
       setTextContent("");

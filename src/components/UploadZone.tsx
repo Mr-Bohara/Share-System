@@ -1,20 +1,26 @@
 import { useRef, useState, DragEvent, ChangeEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Upload, X, AlertCircle, CheckCircle, RotateCw, File as FileIcon } from "lucide-react";
+import { Upload, X, AlertCircle, CheckCircle, RotateCw, File as FileIcon, FileText, Send } from "lucide-react";
 import { ActiveUpload } from "../types";
 
 interface UploadZoneProps {
   activeUploads: ActiveUpload[];
   onFilesSelected: (files: FileList) => void;
   onClearCompletedUploads: () => void;
+  onShareText: (text: string, title?: string) => void;
 }
 
 export default function UploadZone({
   activeUploads,
   onFilesSelected,
   onClearCompletedUploads,
+  onShareText,
 }: UploadZoneProps) {
   const [isDragActive, setIsDragActive] = useState(false);
+  const [activeTab, setActiveTab] = useState<"file" | "text">("file");
+  const [textContent, setTextContent] = useState("");
+  const [textTitle, setTextTitle] = useState("");
+  const [isSubmittingText, setIsSubmittingText] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: DragEvent<HTMLDivElement>) => {
@@ -59,60 +65,163 @@ export default function UploadZone({
 
   return (
     <div id="upload-zone-container" className="w-full flex flex-col gap-6">
-      {/* Drag & Drop Area */}
-      <motion.div
-        id="drop-zone"
-        onDragEnter={handleDrag}
-        onDragOver={handleDrag}
-        onDragLeave={handleDrag}
-        onDrop={handleDrop}
-        onClick={triggerFileInput}
-        whileHover={{ scale: 1.005 }}
-        whileTap={{ scale: 0.995 }}
-        className={`relative overflow-hidden cursor-pointer rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-300 flex flex-col items-center justify-center min-h-[220px] glass-panel ${
-          isDragActive
-            ? "border-blue-500 bg-blue-50/20 dark:bg-blue-950/10 shadow-indigo-500/10 shadow-xl"
-            : "border-slate-300 dark:border-slate-700/80 hover:border-slate-400 dark:hover:border-slate-500/80 hover:shadow-lg hover:shadow-slate-500/5 dark:hover:shadow-indigo-500/5"
-        }`}
-      >
-        <input
-          id="file-input"
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          multiple
-          onChange={handleFileChange}
-        />
+      {/* Tabs Header */}
+      <div id="upload-tabs" className="flex bg-slate-100 dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 shadow-xs">
+        <button
+          id="tab-file-btn"
+          type="button"
+          onClick={() => setActiveTab("file")}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === "file"
+              ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+              : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+          }`}
+        >
+          <Upload className="w-4 h-4" />
+          <span>Upload Files</span>
+        </button>
+        <button
+          id="tab-text-btn"
+          type="button"
+          onClick={() => setActiveTab("text")}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === "text"
+              ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs"
+              : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300"
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>Share Text</span>
+        </button>
+      </div>
 
-        <div className="absolute inset-0 bg-radial from-transparent to-transparent pointer-events-none opacity-40 dark:opacity-20" />
-
-        <div className="flex flex-col items-center gap-3 relative z-10 pointer-events-none">
+      <AnimatePresence mode="wait">
+        {activeTab === "file" ? (
+          /* Drag & Drop Area */
           <motion.div
-            animate={isDragActive ? { y: -8, scale: 1.1 } : { y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 15 }}
-            className={`p-4 rounded-full ${
+            key="file-pane"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.15 }}
+            id="drop-zone"
+            onDragEnter={handleDrag}
+            onDragOver={handleDrag}
+            onDragLeave={handleDrag}
+            onDrop={handleDrop}
+            onClick={triggerFileInput}
+            whileHover={{ scale: 1.005 }}
+            whileTap={{ scale: 0.995 }}
+            className={`relative overflow-hidden cursor-pointer rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-300 flex flex-col items-center justify-center min-h-[220px] glass-panel ${
               isDragActive
-                ? "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400"
-                : "bg-slate-100 text-slate-500 dark:bg-slate-800/80 dark:text-slate-400"
+                ? "border-blue-500 bg-blue-50/20 dark:bg-blue-950/10 shadow-indigo-500/10 shadow-xl"
+                : "border-slate-300 dark:border-slate-700/80 hover:border-slate-400 dark:hover:border-slate-500/80 hover:shadow-lg hover:shadow-slate-500/5 dark:hover:shadow-indigo-500/5"
             }`}
           >
-            <Upload className="w-8 h-8" />
-          </motion.div>
+            <input
+              id="file-input"
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              multiple
+              onChange={handleFileChange}
+            />
 
-          <div className="space-y-1">
-            <p className="text-base font-semibold text-slate-800 dark:text-slate-200">
-              {isDragActive ? "Drop files to share them!" : "Drag & drop files here"}
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              or <span className="text-blue-500 font-medium">browse files</span> from your device
-            </p>
-          </div>
-          
-          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
-            Supports any file format (Images, PDF, Video, Audio, Archives) up to 10 GB
-          </p>
-        </div>
-      </motion.div>
+            <div className="absolute inset-0 bg-radial from-transparent to-transparent pointer-events-none opacity-40 dark:opacity-20" />
+
+            <div className="flex flex-col items-center gap-3 relative z-10 pointer-events-none">
+              <motion.div
+                animate={isDragActive ? { y: -8, scale: 1.1 } : { y: 0, scale: 1 }}
+                transition={{ type: "spring", stiffness: 300, damping: 15 }}
+                className={`p-4 rounded-full ${
+                  isDragActive
+                    ? "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400"
+                    : "bg-slate-100 text-slate-500 dark:bg-slate-800/80 dark:text-slate-400"
+                }`}
+              >
+                <Upload className="w-8 h-8" />
+              </motion.div>
+
+              <div className="space-y-1">
+                <p className="text-base font-semibold text-slate-800 dark:text-slate-200">
+                  {isDragActive ? "Drop files to share them!" : "Drag & drop files here"}
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  or <span className="text-blue-500 font-medium">browse files</span> from your device
+                </p>
+              </div>
+              
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
+                Supports any file format (Images, PDF, Video, Audio, Archives) up to 10 GB
+              </p>
+            </div>
+          </motion.div>
+        ) : (
+          /* Text share area */
+          <motion.div
+            key="text-pane"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.15 }}
+            className="flex flex-col gap-4 p-5 rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-xs"
+          >
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                Note Title (Optional)
+              </label>
+              <input
+                id="text-share-title"
+                type="text"
+                placeholder="e.g. Code snippet, server config, meeting logs..."
+                value={textTitle}
+                onChange={(e) => setTextTitle(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 text-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                Text Content
+              </label>
+              <textarea
+                id="text-share-content"
+                rows={6}
+                placeholder="Paste or type your links, code snippet, logs, or text notes here..."
+                value={textContent}
+                onChange={(e) => setTextContent(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 text-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono resize-none leading-relaxed"
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold pl-1">
+              <span>{textContent.length} characters • {new Blob([textContent]).size} B</span>
+              <span className="text-indigo-500">Auto-destructs in 4 hours</span>
+            </div>
+
+            <button
+              id="share-text-submit-btn"
+              type="button"
+              onClick={async () => {
+                if (!textContent.trim()) return;
+                setIsSubmittingText(true);
+                try {
+                  await onShareText(textContent, textTitle);
+                  setTextContent("");
+                  setTextTitle("");
+                } finally {
+                  setIsSubmittingText(false);
+                }
+              }}
+              disabled={!textContent.trim() || isSubmittingText}
+              className="w-full py-2.5 rounded-xl bg-linear-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 disabled:from-slate-100 disabled:to-slate-100 dark:disabled:from-slate-800/80 dark:disabled:to-slate-800/80 disabled:text-slate-400 text-white font-bold text-xs shadow-md shadow-indigo-500/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Send className="w-4 h-4" />
+              <span>{isSubmittingText ? "Sharing..." : "Share Text Note"}</span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Active & Historical Upload Progress Tracker */}
       {activeUploads.length > 0 && (

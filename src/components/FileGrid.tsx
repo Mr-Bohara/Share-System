@@ -85,6 +85,12 @@ export default function FileGrid({
 
   // Helper to get matching Lucide icon and color
   const getFileIcon = (file: SharedFile) => {
+    if (file.isText) {
+      return {
+        icon: <FileText className="w-5 h-5 text-blue-500" />,
+        bg: "bg-blue-50 dark:bg-blue-950/20"
+      };
+    }
     const ext = file.filename.split(".").pop()?.toLowerCase();
     const mime = file.mimeType.toLowerCase();
 
@@ -134,6 +140,7 @@ export default function FileGrid({
 
   // Filters & categorization logic
   const getFileCategory = (file: SharedFile): string => {
+    if (file.isText) return "texts";
     const mime = file.mimeType.toLowerCase();
     const ext = file.filename.split(".").pop()?.toLowerCase();
     
@@ -170,7 +177,8 @@ export default function FileGrid({
     const matchesSearch =
       file.filename.toLowerCase().includes(search.toLowerCase()) ||
       ext.includes(search.toLowerCase()) ||
-      file.mimeType.toLowerCase().includes(search.toLowerCase());
+      file.mimeType.toLowerCase().includes(search.toLowerCase()) ||
+      (file.textContent && file.textContent.toLowerCase().includes(search.toLowerCase()));
 
     // 3. Category match
     const category = getFileCategory(file);
@@ -198,7 +206,8 @@ export default function FileGrid({
   });
 
   const categories = [
-    { id: "all", label: "All Files" },
+    { id: "all", label: "All Shares" },
+    { id: "texts", label: "Texts" },
     { id: "images", label: "Images" },
     { id: "media", label: "Audio & Video" },
     { id: "documents", label: "Documents" },
