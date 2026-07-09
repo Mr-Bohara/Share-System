@@ -109,7 +109,7 @@ export default function UploadZone({
           </div>
           
           <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
-            Supports any file format (Images, PDF, Video, Audio, Archives) up to 500 MB
+            Supports any file format (Images, PDF, Video, Audio, Archives) up to 10 GB
           </p>
         </div>
       </motion.div>

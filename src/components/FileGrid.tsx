@@ -442,14 +442,9 @@ export default function FileGrid({
                         </button>
                         <button
                           id={`delete-btn-${file.id}`}
-                          disabled={!isOwner}
                           onClick={() => onDelete(file)}
-                          className={`flex items-center justify-center gap-1 py-1.5 rounded-lg border transition-all text-[11px] font-semibold ${
-                            isOwner
-                              ? "border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer"
-                              : "border-slate-100 dark:border-slate-900 text-slate-300 dark:text-slate-700 cursor-not-allowed"
-                          }`}
-                          title={isOwner ? "Delete File" : "Only uploader can delete"}
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer transition-all text-[11px] font-semibold"
+                          title="Delete File Permanently"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -546,14 +541,9 @@ export default function FileGrid({
                           </button>
                           <button
                             id={`row-delete-btn-${file.id}`}
-                            disabled={!isOwner}
                             onClick={() => onDelete(file)}
-                            className={`p-1.5 rounded-lg border transition-colors ${
-                              isOwner
-                                ? "border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer"
-                                : "border-slate-100 dark:border-slate-900 text-slate-200 dark:text-slate-800 cursor-not-allowed"
-                            }`}
-                            title={isOwner ? "Delete File" : "Only uploader can delete"}
+                            className="p-1.5 rounded-lg border border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer transition-colors"
+                            title="Delete File Permanently"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>

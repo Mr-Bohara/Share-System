@@ -5,8 +5,8 @@ service cloud.firestore {
       // Anyone can read file metadata for downloading and previewing
       allow read: if true;
       
-      // Allow creation if size is under 500MB, filename is a string, and storagePath is a string.
-      allow create: if request.resource.data.size <= 524288000 // Max 500MB
+      // Allow creation if size is under 10GB, filename is a string, and storagePath is a string.
+      allow create: if request.resource.data.size <= 10737418240 // Max 10GB
                     && request.resource.data.filename is string
                     && request.resource.data.storagePath is string;
       

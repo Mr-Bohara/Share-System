@@ -28,7 +28,8 @@ import {
   Clock,
   ShieldCheck,
   FileUp,
-  Info
+  Info,
+  Trash2
 } from "lucide-react";
 
 import { db, storage, auth } from "./firebase/config";
@@ -52,6 +53,8 @@ export default function App() {
   // Toast & Modals
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [previewFile, setPreviewFile] = useState<SharedFile | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
+  const [isClearing, setIsClearing] = useState<boolean>(false);
 
   // Toast helper
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -170,9 +173,9 @@ export default function App() {
     }
 
     Array.from(selectedFiles).forEach((file) => {
-      // Security: Validate file size (Max 500MB)
-      if (file.size > 524288000) {
-        addToast(`"${file.name}" exceeds the maximum limit of 500MB!`, "error");
+      // Security: Validate file size (Max 10GB)
+      if (file.size > 10737418240) {
+        addToast(`"${file.name}" exceeds the maximum limit of 10GB!`, "error");
         return;
       }
 
@@ -511,26 +514,68 @@ export default function App() {
     setActiveUploads((prev) => prev.filter((u) => u.status !== "completed"));
   };
 
-  // 5. File deletion handle (Storage + Firestore + State sync)
-  const handleDeleteFile = async (file: SharedFile) => {
-    if (!user) return;
-    
-    // Safety check - uploader verification
-    if (file.uploaderUid !== user.uid) {
-      addToast("Unauthorized: You can only delete your own uploads.", "error");
+  // 5.5 Clear Whole System Database and Storage
+  const handleClearWholeSystem = async () => {
+    if (files.length === 0) {
+      addToast("No files to clear.", "info");
+      setShowClearConfirm(false);
       return;
     }
 
+    setIsClearing(true);
+    addToast("Initiating whole system purge...", "info");
+
+    const deletePromises = files.map(async (file) => {
+      try {
+        // 1. Delete from Firebase Storage if path is defined and is a real firebase storage file
+        if (file.storagePath && !file.storagePath.startsWith("alternative")) {
+          const storageRef = ref(storage, file.storagePath);
+          await deleteObject(storageRef).catch((storageErr: any) => {
+            console.warn(`[Purge] Storage file deletion bypassed/ignored: ${file.storagePath}`, storageErr);
+          });
+        }
+
+        // 2. Delete metadata document from Firestore
+        await deleteDoc(doc(db, "files", file.id));
+        return { success: true };
+      } catch (err: any) {
+        console.error(`[Purge] Failed to delete file ${file.id}:`, err);
+        return { success: false };
+      }
+    });
+
+    const results = await Promise.all(deletePromises);
+    const deletedCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    setIsClearing(false);
+    setShowClearConfirm(false);
+
+    if (previewFile) {
+      setPreviewFile(null);
+    }
+
+    if (failedCount === 0) {
+      addToast(`Permanently cleared system database. Deleted ${deletedCount} files.`, "success");
+    } else {
+      addToast(`Cleared system database with errors. ${deletedCount} succeeded, ${failedCount} failed.`, "error");
+    }
+  };
+
+  // 5. File deletion handle (Storage + Firestore + State sync)
+  const handleDeleteFile = async (file: SharedFile) => {
     addToast(`Deleting "${file.filename}"...`, "info");
 
     try {
-      // 1. Purge from Firebase Storage
-      const storageRef = ref(storage, file.storagePath);
-      try {
-        await deleteObject(storageRef);
-      } catch (storageErr: any) {
-        // If file doesn't exist anymore on Storage, proceed to delete metadata
-        console.warn("Storage object already deleted or not found:", storageErr);
+      // 1. Purge from Firebase Storage if it is a real storage file
+      if (file.storagePath && !file.storagePath.startsWith("alternative")) {
+        const storageRef = ref(storage, file.storagePath);
+        try {
+          await deleteObject(storageRef);
+        } catch (storageErr: any) {
+          // If file doesn't exist anymore on Storage, proceed to delete metadata
+          console.warn("Storage object already deleted or not found:", storageErr);
+        }
       }
 
       // 2. Purge metadata from Firestore
@@ -706,9 +751,22 @@ export default function App() {
                   <Database className="w-4.5 h-4.5 text-blue-500" />
                   <span>Available Files</span>
                 </h2>
-                <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300">
-                  Realtime updates active
-                </span>
+                <div className="flex items-center gap-3">
+                  {files.length > 0 && (
+                    <button
+                      id="clear-all-system-btn"
+                      onClick={() => setShowClearConfirm(true)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      title="Permanently clear whole system database and storage"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear System DB</span>
+                    </button>
+                  )}
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300">
+                    Realtime updates active
+                  </span>
+                </div>
               </div>
 
               <FileGrid
@@ -742,6 +800,73 @@ export default function App() {
           onClose={() => setPreviewFile(null)}
           onDownload={handleDownloadFile}
         />
+
+        {/* System Purge Confirmation Modal */}
+        <AnimatePresence>
+          {showClearConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-black/80 backdrop-blur-xs">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                transition={{ duration: 0.15, ease: "easeOut" }}
+                className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden"
+              >
+                {/* Decorative background hazard accent */}
+                <div className="absolute top-0 right-0 w-32 h-32 rounded-full bg-rose-500/10 dark:bg-rose-500/5 blur-3xl pointer-events-none" />
+
+                <div className="flex flex-col items-center text-center gap-4">
+                  <div className="p-3.5 bg-rose-50 dark:bg-rose-950/30 rounded-2xl text-rose-500 border border-rose-100 dark:border-rose-900/30">
+                    <Trash2 className="w-8 h-8" />
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <h3 className="text-lg font-bold text-slate-950 dark:text-white">
+                      Purge Whole System?
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
+                      This action will **permanently delete all files** from Firebase Storage, external fallbacks, and clear all Firestore metadata. This is irreversible.
+                    </p>
+                  </div>
+
+                  {/* Warning Box */}
+                  <div className="w-full p-3 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/30 text-[11px] text-amber-700 dark:text-amber-300 font-medium text-left">
+                    ⚠️ There are currently <span className="font-bold">{files.length}</span> active files hosted in the system.
+                  </div>
+
+                  <div className="w-full flex gap-3 mt-2">
+                    <button
+                      id="cancel-purge-btn"
+                      onClick={() => setShowClearConfirm(false)}
+                      disabled={isClearing}
+                      className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-xs font-semibold text-slate-600 dark:text-slate-300 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      id="confirm-purge-btn"
+                      onClick={handleClearWholeSystem}
+                      disabled={isClearing}
+                      className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-md shadow-rose-500/10 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      {isClearing ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Purging...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Permanently Delete</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         {/* Notifications container */}
         <ToastContainer toasts={toasts} removeToast={removeToast} />
