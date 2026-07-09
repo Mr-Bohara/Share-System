@@ -693,6 +693,19 @@ export default function App() {
   // 7. Direct file downloads with force attachment
   const handleDownloadFile = (file: SharedFile) => {
     try {
+      // Check if it's a data URL (e.g. text notes)
+      if (file.downloadUrl.startsWith("data:")) {
+        const link = document.createElement("a");
+        link.href = file.downloadUrl;
+        link.target = "_blank";
+        link.setAttribute("download", file.filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        addToast(`Initiated download for "${file.filename}"`, "success");
+        return;
+      }
+
       // Append response-content-disposition query parameter to force download on client
       const url = new URL(file.downloadUrl);
       url.searchParams.append("response-content-disposition", "attachment");
