@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /files/{fileId} {
+      // Anyone can read file metadata for downloading and previewing
+      allow read: if true;
+      
+      // Allow creation if size is under 500MB, filename is a string, and storagePath is a string.
+      // If signed in, verify uploaderUid matches the authenticated user; otherwise, accept any string uploaderUid.
+      allow create: if (request.auth != null ? request.resource.data.uploaderUid == request.auth.uid : request.resource.data.uploaderUid is string)
+                    && request.resource.data.size <= 524288000 // Max 500MB
+                    && request.resource.data.filename is string
+                    && request.resource.data.storagePath is string;
+      
+      // Allow deletion. If signed in, ensure they can only delete their own uploads; if guest/fallback, allow deletion.
+      allow delete: if request.auth != null ? resource.data.uploaderUid == request.auth.uid : true;
+    }
+  }
+}

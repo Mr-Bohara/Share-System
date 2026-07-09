@@ -1,0 +1,38 @@
+name: Deploy to Firebase Hosting & Functions
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install Root Dependencies
+        run: npm ci
+
+      - name: Build Frontend (Vite)
+        run: npm run build
+
+      - name: Install Cloud Functions Dependencies
+        run: npm ci --prefix functions
+
+      - name: Build Cloud Functions (TypeScript)
+        run: npm run build --prefix functions
+
+      - name: Deploy to Firebase Hosting, Firestore, Storage & Functions
+        uses: w9jds/firebase-action@v2.2.2
+        with:
+          args: deploy
+        env:
+          GCP_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}

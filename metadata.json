@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "Temporary File Share",
+  "description": "A secure, fast, and modern web application to upload and share files temporarily. Files are automatically deleted after 1 hour.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

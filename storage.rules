@@ -1,0 +1,17 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /uploads/{fileId}/{fileName} {
+      // Anyone can read/download files
+      allow read: if true;
+      
+      // Allow upload if size is under 500MB.
+      // If signed in, verify uploaderUid in custom metadata matches the authenticated user; otherwise, accept any string.
+      allow create: if (request.auth != null ? request.resource.metadata.uploaderUid == request.auth.uid : request.resource.metadata.uploaderUid is string)
+                    && request.resource.size <= 524288000; // Max 500MB
+      
+      // Allow deletion. If signed in, ensure they can only delete their own uploads; if guest/fallback, allow deletion.
+      allow delete: if request.auth != null ? resource.metadata.uploaderUid == request.auth.uid : true;
+    }
+  }
+}
