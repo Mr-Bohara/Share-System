@@ -1,13 +1,13 @@
 import { useRef, useState, DragEvent, ChangeEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Upload, X, AlertCircle, CheckCircle, RotateCw, File as FileIcon, FileText, Send } from "lucide-react";
+import { Upload, X, AlertCircle, CheckCircle, RotateCw, File as FileIcon, FileText, Send, ShieldAlert, Globe, Lock, Pause, Play } from "lucide-react";
 import { ActiveUpload } from "../types";
 
 interface UploadZoneProps {
   activeUploads: ActiveUpload[];
-  onFilesSelected: (files: FileList) => void;
+  onFilesSelected: (files: FileList, isPrivate: boolean, secretCode: string) => void;
   onClearCompletedUploads: () => void;
-  onShareText: (text: string, title?: string) => void;
+  onShareText: (text: string, title?: string, isPrivate?: boolean, secretCode?: string) => void;
 }
 
 export default function UploadZone({
@@ -21,6 +21,8 @@ export default function UploadZone({
   const [textContent, setTextContent] = useState("");
   const [textTitle, setTextTitle] = useState("");
   const [isSubmittingText, setIsSubmittingText] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [secretCode, setSecretCode] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: DragEvent<HTMLDivElement>) => {
@@ -37,18 +39,21 @@ export default function UploadZone({
     e.preventDefault();
     e.stopPropagation();
     setIsDragActive(false);
+    if (isPrivate && !secretCode.trim()) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFilesSelected(e.dataTransfer.files);
+      onFilesSelected(e.dataTransfer.files, isPrivate, secretCode);
     }
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (isPrivate && !secretCode.trim()) return;
     if (e.target.files && e.target.files.length > 0) {
-      onFilesSelected(e.target.files);
+      onFilesSelected(e.target.files, isPrivate, secretCode);
     }
   };
 
   const triggerFileInput = () => {
+    if (isPrivate && !secretCode.trim()) return;
     fileInputRef.current?.click();
   };
 
@@ -62,6 +67,8 @@ export default function UploadZone({
   };
 
   const completedUploads = activeUploads.filter((u) => u.status === "completed");
+
+  const hasMissingCode = isPrivate && !secretCode.trim();
 
   return (
     <div id="upload-zone-container" className="w-full flex flex-col gap-6">
@@ -95,6 +102,92 @@ export default function UploadZone({
         </button>
       </div>
 
+      {/* Security Options Card */}
+      <div className="p-4 rounded-2xl border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 flex flex-col gap-3 shadow-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+            <ShieldAlert className="w-4 h-4 text-indigo-500" />
+            <span>Sharing Security</span>
+          </span>
+          <div className="flex bg-slate-50 dark:bg-slate-950 p-1 rounded-xl border border-slate-200/40 dark:border-slate-800/60">
+            <button
+              type="button"
+              onClick={() => {
+                setIsPrivate(false);
+                setSecretCode("");
+              }}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                !isPrivate
+                  ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs border border-slate-100 dark:border-slate-750"
+                  : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+              }`}
+            >
+              <Globe className="w-3 h-3" />
+              <span>Public</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsPrivate(true);
+                setSecretCode(Math.floor(1000 + Math.random() * 9000).toString());
+              }}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                isPrivate
+                  ? "bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-xs border border-slate-100 dark:border-slate-750"
+                  : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+              }`}
+            >
+              <Lock className="w-3 h-3" />
+              <span>Private</span>
+            </button>
+          </div>
+        </div>
+
+        {isPrivate && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            className="space-y-2 border-t border-slate-100 dark:border-slate-800/40 pt-3 flex flex-col"
+          >
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                Secret Access Code
+              </label>
+              <button
+                type="button"
+                onClick={() => setSecretCode(Math.floor(1000 + Math.random() * 9000).toString())}
+                className="text-[10px] text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <RotateCw className="w-3 h-3" />
+                <span>Regenerate</span>
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                maxLength={16}
+                placeholder="Type access code (e.g. 1234, secret)"
+                value={secretCode}
+                onChange={(e) => setSecretCode(e.target.value.replace(/\s+/g, ""))}
+                className={`flex-1 px-3 py-2 rounded-xl border bg-slate-50/50 dark:bg-slate-950/40 text-slate-700 dark:text-slate-200 text-xs font-mono focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 ${
+                  hasMissingCode ? "border-rose-500 ring-2 ring-rose-500/10" : "border-slate-200 dark:border-slate-800"
+                }`}
+              />
+            </div>
+            {hasMissingCode ? (
+              <p className="text-[10px] text-rose-500 font-semibold flex items-center gap-1 animate-pulse">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Secret code is required to lock private shares!</span>
+              </p>
+            ) : (
+              <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                🔒 Files are encrypted on-the-fly. Decryption requires this exact code.
+              </p>
+            )}
+          </motion.div>
+        )}
+      </div>
+
       <AnimatePresence mode="wait">
         {activeTab === "file" ? (
           /* Drag & Drop Area */
@@ -110,10 +203,12 @@ export default function UploadZone({
             onDragLeave={handleDrag}
             onDrop={handleDrop}
             onClick={triggerFileInput}
-            whileHover={{ scale: 1.005 }}
-            whileTap={{ scale: 0.995 }}
+            whileHover={hasMissingCode ? {} : { scale: 1.005 }}
+            whileTap={hasMissingCode ? {} : { scale: 0.995 }}
             className={`relative overflow-hidden cursor-pointer rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-300 flex flex-col items-center justify-center min-h-[220px] glass-panel ${
-              isDragActive
+              hasMissingCode
+                ? "border-rose-300/60 dark:border-rose-950 bg-rose-50/5 dark:bg-rose-950/5 cursor-not-allowed"
+                : isDragActive
                 ? "border-blue-500 bg-blue-50/20 dark:bg-blue-950/10 shadow-indigo-500/10 shadow-xl"
                 : "border-slate-300 dark:border-slate-700/80 hover:border-slate-400 dark:hover:border-slate-500/80 hover:shadow-lg hover:shadow-slate-500/5 dark:hover:shadow-indigo-500/5"
             }`}
@@ -124,6 +219,7 @@ export default function UploadZone({
               type="file"
               className="hidden"
               multiple
+              disabled={hasMissingCode}
               onChange={handleFileChange}
             />
 
@@ -134,25 +230,37 @@ export default function UploadZone({
                 animate={isDragActive ? { y: -8, scale: 1.1 } : { y: 0, scale: 1 }}
                 transition={{ type: "spring", stiffness: 300, damping: 15 }}
                 className={`p-4 rounded-full ${
-                  isDragActive
+                  hasMissingCode
+                    ? "bg-rose-100 text-rose-500 dark:bg-rose-950/40 dark:text-rose-400"
+                    : isDragActive
                     ? "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400"
                     : "bg-slate-100 text-slate-500 dark:bg-slate-800/80 dark:text-slate-400"
                 }`}
               >
-                <Upload className="w-8 h-8" />
+                {hasMissingCode ? <Lock className="w-8 h-8" /> : <Upload className="w-8 h-8" />}
               </motion.div>
 
               <div className="space-y-1">
                 <p className="text-base font-semibold text-slate-800 dark:text-slate-200">
-                  {isDragActive ? "Drop files to share them!" : "Drag & drop files here"}
+                  {hasMissingCode
+                    ? "Security Lock Active"
+                    : isDragActive
+                    ? "Drop files to share them!"
+                    : "Drag & drop files here"}
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  or <span className="text-blue-500 font-medium">browse files</span> from your device
+                  {hasMissingCode ? (
+                    <span className="text-rose-500 font-medium">Please enter a secret code above to enable uploading</span>
+                  ) : (
+                    <>
+                      or <span className="text-blue-500 font-medium">browse files</span> from your device
+                    </>
+                  )}
                 </p>
               </div>
               
               <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-2">
-                Supports any file format (Images, PDF, Video, Audio, Archives) up to 10 GB
+                {isPrivate ? "🔒 Files are automatically encrypted before upload" : "Public sharing: anyone can access downloaded files"}
               </p>
             </div>
           </motion.div>
@@ -196,28 +304,30 @@ export default function UploadZone({
 
             <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold pl-1">
               <span>{textContent.length} characters • {new Blob([textContent]).size} B</span>
-              <span className="text-indigo-500">Auto-destructs in 4 hours</span>
+              <span className={isPrivate ? "text-indigo-500 font-bold" : "text-slate-400"}>
+                {isPrivate ? "🔒 Encrypted • Expire in 4h" : "Auto-destructs in 4 hours"}
+              </span>
             </div>
 
             <button
               id="share-text-submit-btn"
               type="button"
               onClick={async () => {
-                if (!textContent.trim()) return;
+                if (!textContent.trim() || hasMissingCode) return;
                 setIsSubmittingText(true);
                 try {
-                  await onShareText(textContent, textTitle);
+                  await onShareText(textContent, textTitle, isPrivate, secretCode);
                   setTextContent("");
                   setTextTitle("");
                 } finally {
                   setIsSubmittingText(false);
                 }
               }}
-              disabled={!textContent.trim() || isSubmittingText}
+              disabled={!textContent.trim() || isSubmittingText || hasMissingCode}
               className="w-full py-2.5 rounded-xl bg-linear-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 disabled:from-slate-100 disabled:to-slate-100 dark:disabled:from-slate-800/80 dark:disabled:to-slate-800/80 disabled:text-slate-400 text-white font-bold text-xs shadow-md shadow-indigo-500/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <Send className="w-4 h-4" />
-              <span>{isSubmittingText ? "Sharing..." : "Share Text Note"}</span>
+              <span>{isSubmittingText ? "Sharing..." : isPrivate ? "Share Private Text" : "Share Text Note"}</span>
             </button>
           </motion.div>
         )}
@@ -273,6 +383,11 @@ export default function UploadZone({
                           {Math.round(upload.progress)}%
                         </span>
                       )}
+                      {upload.status === "paused" && (
+                        <span className="text-[10px] font-mono text-amber-500 font-medium animate-pulse">
+                          Paused ({Math.round(upload.progress)}%)
+                        </span>
+                      )}
                       {upload.status === "completed" && (
                         <CheckCircle className="w-4 h-4 text-emerald-500" />
                       )}
@@ -280,42 +395,70 @@ export default function UploadZone({
                         <AlertCircle className="w-4 h-4 text-rose-500" />
                       )}
 
-                      {/* Action buttons (Cancel / Retry) */}
-                      {upload.status === "uploading" && upload.cancel && (
+                      {/* Action buttons (Pause / Play / Cancel) */}
+                      {upload.status === "uploading" && upload.pause && (
+                        <button
+                          id={`pause-upload-${upload.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            upload.pause?.();
+                          }}
+                          className="text-slate-400 hover:text-amber-500 dark:hover:text-amber-400 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          title="Pause Upload"
+                        >
+                          <Pause className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {upload.status === "paused" && upload.resume && (
+                        <button
+                          id={`resume-upload-${upload.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            upload.resume?.();
+                          }}
+                          className="text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          title="Resume Upload"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {(upload.status === "uploading" || upload.status === "paused") && upload.cancel && (
                         <button
                           id={`cancel-upload-${upload.id}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             upload.cancel?.();
                           }}
-                          className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                          className="text-slate-400 hover:text-rose-500 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                           title="Cancel Upload"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       )}
 
-                      {(upload.status === "failed" || upload.status === "cancelled") && upload.retry && (
+                      {(upload.status === "failed" || upload.status === "cancelled") && upload.resume && (
                         <button
                           id={`retry-upload-${upload.id}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            upload.retry?.();
+                            upload.resume?.();
                           }}
                           className="text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer flex items-center justify-center"
                           title="Retry Upload"
                         >
-                          <RotateCw className="w-3.5 h-3.5 animate-hover:spin" />
+                          <RotateCw className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
                   </div>
 
                   {/* Progress bar */}
-                  {upload.status === "uploading" && (
+                  {(upload.status === "uploading" || upload.status === "paused") && (
                     <div className="w-full bg-slate-200 dark:bg-slate-800 h-1 rounded-full overflow-hidden relative z-10">
                       <motion.div
-                        className="bg-linear-to-r from-blue-500 to-indigo-500 h-full rounded-full"
+                        className={`h-full rounded-full ${upload.status === "paused" ? "bg-amber-500" : "bg-linear-to-r from-blue-500 to-indigo-500"}`}
                         style={{ width: `${upload.progress}%` }}
                         transition={{ duration: 0.1 }}
                       />

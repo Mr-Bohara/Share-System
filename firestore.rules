@@ -8,7 +8,8 @@ service cloud.firestore {
       // Allow creation if size is under 10GB, filename is a string, and storagePath is a string.
       allow create: if request.resource.data.size <= 10737418240 // Max 10GB
                     && request.resource.data.filename is string
-                    && request.resource.data.storagePath is string;
+                    && request.resource.data.storagePath is string
+                    && (!request.resource.data.isPrivate || (request.resource.data.secretCodeHash is string && request.resource.data.secretCodeHash.size() > 0));
       
       // Allow deletion.
       allow delete: if true;

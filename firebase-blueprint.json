@@ -1,0 +1,31 @@
+{
+  "entities": {
+    "SharedFile": {
+      "title": "SharedFile",
+      "description": "Metadata for a shared file or shared text note",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "filename": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "downloadUrl": { "type": "string" },
+        "uploadedAt": { "type": "integer" },
+        "expiresAt": { "type": "integer" },
+        "size": { "type": "integer" },
+        "mimeType": { "type": "string" },
+        "uploaderUid": { "type": "string" },
+        "isText": { "type": "boolean" },
+        "textContent": { "type": "string" },
+        "isPrivate": { "type": "boolean" },
+        "secretCodeHash": { "type": "string" }
+      },
+      "required": ["filename", "storagePath", "downloadUrl", "uploadedAt", "expiresAt", "size", "mimeType", "uploaderUid"]
+    }
+  },
+  "firestore": {
+    "/files/{fileId}": {
+      "schema": "SharedFile",
+      "description": "Index of shared files and text snippets"
+    }
+  }
+}

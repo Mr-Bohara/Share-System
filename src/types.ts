@@ -10,6 +10,8 @@ export interface SharedFile {
   uploaderUid: string;
   isText?: boolean;
   textContent?: string;
+  isPrivate?: boolean;
+  secretCodeHash?: string;
 }
 
 export interface ActiveUpload {
@@ -17,10 +19,11 @@ export interface ActiveUpload {
   filename: string;
   size: number;
   progress: number;
-  status: 'uploading' | 'completed' | 'failed' | 'cancelled';
+  status: 'uploading' | 'completed' | 'failed' | 'cancelled' | 'paused';
   error?: string;
   cancel?: () => void;
-  retry?: () => void;
+  pause?: () => void;
+  resume?: () => void;
   file: File;
 }
 

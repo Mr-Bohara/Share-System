@@ -68,47 +68,11 @@ export default function PreviewModal({ file, onClose, onDownload }: PreviewModal
   }, [file, isText]);
 
   useEffect(() => {
-    if (!file) {
-      setMediaUrl("");
+    if (file) {
+      setMediaUrl(file.downloadUrl);
       setLoadingMedia(false);
-      return;
     }
-
-    const isMedia = isImage || isVideo || isAudio || isPDF;
-    if (!isMedia) return;
-
-    setLoadingMedia(true);
-    setMediaUrl("");
-
-    let active = true;
-    let createdUrl = "";
-
-    fetch(file.downloadUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error("Could not fetch file bytes");
-        return res.blob();
-      })
-      .then((blob) => {
-        if (!active) return;
-        createdUrl = URL.createObjectURL(blob);
-        setMediaUrl(createdUrl);
-        setLoadingMedia(false);
-      })
-      .catch((err) => {
-        console.warn("Media preview fetch failed (CORS or network). Using direct downloadUrl:", err);
-        if (!active) return;
-        // Fallback to direct URL
-        setMediaUrl(file.downloadUrl);
-        setLoadingMedia(false);
-      });
-
-    return () => {
-      active = false;
-      if (createdUrl && createdUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(createdUrl);
-      }
-    };
-  }, [file, isImage, isVideo, isAudio, isPDF]);
+  }, [file]);
 
   if (!file) return null;
 

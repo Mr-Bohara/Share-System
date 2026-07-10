@@ -34,6 +34,7 @@ import {
 
 import { db, storage, auth } from "./firebase/config";
 import { SharedFile, ActiveUpload, Theme } from "./types";
+import { encryptText, hashSecretCode } from "./utils/crypto";
 import UploadZone from "./components/UploadZone";
 import FileGrid from "./components/FileGrid";
 import PreviewModal from "./components/PreviewModal";
@@ -166,7 +167,7 @@ export default function App() {
   }, [user]);
 
   // 4.5. Text share processor
-  const handleShareText = async (text: string, customTitle?: string) => {
+  const handleShareText = async (text: string, customTitle?: string, isPrivate?: boolean, secretCode?: string) => {
     if (!user) {
       addToast("Connection offline. Please wait.", "error");
       return;
@@ -190,7 +191,21 @@ export default function App() {
     const byteSize = encoder.encode(text).length;
 
     // We can generate a standard data URI so it behaves like a normal file for downloads
-    const downloadUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`;
+    let downloadUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`;
+    let textContent = text;
+    let secretCodeHash = "";
+
+    if (isPrivate && secretCode) {
+      try {
+        textContent = await encryptText(text, secretCode);
+        downloadUrl = await encryptText(downloadUrl, secretCode);
+        secretCodeHash = await hashSecretCode(secretCode);
+      } catch (e) {
+        console.error("Text encryption failed:", e);
+        addToast("Encryption failed. Failed to share text.", "error");
+        return;
+      }
+    }
 
     try {
       await setDoc(doc(db, "files", uploadId), {
@@ -203,7 +218,9 @@ export default function App() {
         mimeType: "text/plain",
         uploaderUid: user.uid,
         isText: true,
-        textContent: text,
+        textContent: textContent,
+        isPrivate: !!isPrivate,
+        secretCodeHash: secretCodeHash || null,
       });
 
       addToast(`Successfully shared text note "${filename}"!`, "success");
@@ -214,7 +231,7 @@ export default function App() {
   };
 
   // 4. File upload processor
-  const handleFilesSelected = (selectedFiles: FileList) => {
+  const handleFilesSelected = (selectedFiles: FileList, isPrivate: boolean = false, secretCode: string = "") => {
     if (!user) {
       addToast("Connection offline. Please wait.", "error");
       return;
@@ -230,11 +247,11 @@ export default function App() {
       // Generate a unique file ID
       const uploadId = crypto.randomUUID();
       
-      startFileUpload(file, uploadId);
+      startFileUpload(file, uploadId, isPrivate, secretCode);
     });
   };
 
-  const startFileUpload = (file: File, uploadId: string) => {
+  const startFileUpload = (file: File, uploadId: string, isPrivate: boolean = false, secretCode: string = "") => {
     if (!user) return;
 
     console.debug(`[UploadLifecycle:${uploadId}] Initializing startFileUpload. File: ${file.name}, Size: ${file.size} bytes.`);
@@ -289,11 +306,29 @@ export default function App() {
           prev.map((u) => (u.id === uploadId ? { ...u, status: "cancelled", error: "Upload cancelled" } : u))
         );
       },
-      retry: () => {
-        console.debug(`[UploadLifecycle:${uploadId}] Retry triggered. Resetting active list and restarting...`);
-        // Retry logic: clear from active uploads list and start fresh
-        setActiveUploads((prev) => prev.filter((u) => u.id !== uploadId));
-        startFileUpload(file, uploadId);
+      pause: () => {
+        try {
+          console.debug(`[UploadLifecycle:${uploadId}] Pausing task...`);
+          uploadTask.pause();
+          setActiveUploads((prev) =>
+            prev.map((u) => (u.id === uploadId ? { ...u, status: "paused" } : u))
+          );
+        } catch (e) {
+          console.warn("Pause failed:", e);
+        }
+      },
+      resume: () => {
+        try {
+          console.debug(`[UploadLifecycle:${uploadId}] Resuming task...`);
+          uploadTask.resume();
+          setActiveUploads((prev) =>
+            prev.map((u) => (u.id === uploadId ? { ...u, status: "uploading" } : u))
+          );
+        } catch (e) {
+          console.warn("Resume failed, restarting upload:", e);
+          setActiveUploads((prev) => prev.filter((u) => u.id !== uploadId));
+          startFileUpload(file, uploadId, isPrivate, secretCode);
+        }
       },
     };
 
@@ -452,16 +487,31 @@ export default function App() {
       const uploadedAt = Date.now();
       const expiresAt = uploadedAt + 14400000; // exactly 4 hours expiry
 
+      let finalUrl = downloadUrl;
+      let secretCodeHash = "";
+      if (isPrivate && secretCode) {
+        try {
+          finalUrl = await encryptText(downloadUrl, secretCode);
+          secretCodeHash = await hashSecretCode(secretCode);
+        } catch (e) {
+          console.error("Encryption failed:", e);
+          handleUploadError(new Error("Failed to encrypt file data."));
+          return;
+        }
+      }
+
       try {
         await setDoc(doc(db, "files", uploadId), {
           filename: file.name,
           storagePath: method.startsWith("alternative") ? `alternative/${uploadId}/${file.name}` : storagePath,
-          downloadUrl: downloadUrl,
+          downloadUrl: finalUrl,
           uploadedAt: uploadedAt,
           expiresAt: expiresAt,
           size: file.size,
           mimeType: file.type || "application/octet-stream",
           uploaderUid: user.uid,
+          isPrivate: !!isPrivate,
+          secretCodeHash: secretCodeHash || null,
         });
 
         // Mark tracker as completed
@@ -508,8 +558,9 @@ export default function App() {
       (snapshot) => {
         const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
         const roundedProgress = Math.min(Math.round(progress), 99);
+        const currentState = snapshot.state; // 'paused' | 'running'
         
-        console.debug(`[UploadLifecycle:${uploadId}] uploadTask state_changed: Transferred ${snapshot.bytesTransferred}/${snapshot.totalBytes} (${progress.toFixed(2)}%). primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+        console.debug(`[UploadLifecycle:${uploadId}] uploadTask state_changed: State: ${currentState}, Transferred ${snapshot.bytesTransferred}/${snapshot.totalBytes} (${progress.toFixed(2)}%). primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
         if (primaryCompletedOrCancelled) return;
         if (progress > 0) {
           hasProgressed = true;
@@ -520,14 +571,22 @@ export default function App() {
           }
         }
         
-        // Throttling: Only trigger React state update if the integer value has increased.
-        // This prevents freezing the main browser thread on large file transfers.
-        if (roundedProgress > lastProgress) {
-          lastProgress = roundedProgress;
-          setActiveUploads((prev) =>
-            prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
-          );
-        }
+        // Update state if progress increased or state changed
+        setActiveUploads((prev) =>
+          prev.map((u) => {
+            if (u.id !== uploadId) return u;
+            const updatedStatus = currentState === "paused" ? "paused" : "uploading";
+            const newProgress = roundedProgress > u.progress ? roundedProgress : u.progress;
+            if (u.progress !== newProgress || u.status !== updatedStatus) {
+              return {
+                ...u,
+                progress: newProgress,
+                status: updatedStatus,
+              };
+            }
+            return u;
+          })
+        );
       }
     );
 
@@ -691,13 +750,12 @@ export default function App() {
   };
 
   // 7. Direct file downloads with force attachment
-  const handleDownloadFile = (file: SharedFile) => {
+  const handleDownloadFile = async (file: SharedFile) => {
     try {
       // Check if it's a data URL (e.g. text notes)
       if (file.downloadUrl.startsWith("data:")) {
         const link = document.createElement("a");
         link.href = file.downloadUrl;
-        link.target = "_blank";
         link.setAttribute("download", file.filename);
         document.body.appendChild(link);
         link.click();
@@ -706,23 +764,44 @@ export default function App() {
         return;
       }
 
-      // Append response-content-disposition query parameter to force download on client
-      const url = new URL(file.downloadUrl);
-      url.searchParams.append("response-content-disposition", "attachment");
+      addToast(`Preparing direct download for "${file.filename}"...`, "info");
+
+      // Fetch the file bytes as a blob to bypass cross-origin restrictions on the a[download] attribute
+      const res = await fetch(file.downloadUrl);
+      if (!res.ok) throw new Error("Could not fetch file contents");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
 
       const link = document.createElement("a");
-      link.href = url.toString();
-      link.target = "_blank";
+      link.href = blobUrl;
       link.setAttribute("download", file.filename);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      addToast(`Initiated download for "${file.filename}"`, "success");
+      // Clean up blob URL
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 1500);
+
+      addToast(`Downloaded "${file.filename}" successfully!`, "success");
     } catch (err) {
-      console.error("Download helper error:", err);
-      // Fallback to standard window open
-      window.open(file.downloadUrl, "_blank");
+      console.warn("Direct blob download failed, falling back to URL download:", err);
+      try {
+        // Fallback: Append response-content-disposition query parameter to force download on client
+        const url = new URL(file.downloadUrl);
+        url.searchParams.append("response-content-disposition", "attachment");
+
+        const link = document.createElement("a");
+        link.href = url.toString();
+        link.setAttribute("download", file.filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        addToast(`Initiated download for "${file.filename}"`, "success");
+      } catch (fallbackErr) {
+        window.open(file.downloadUrl, "_blank");
+      }
     }
   };
 

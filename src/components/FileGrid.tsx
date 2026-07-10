@@ -19,10 +19,15 @@ import {
   List,
   Copy,
   Check,
-  QrCode
+  QrCode,
+  Lock,
+  Unlock,
+  ShieldAlert,
+  Key
 } from "lucide-react";
 import { SharedFile, SortField } from "../types";
 import QrModal from "./QrModal";
+import { decryptText, hashSecretCode } from "../utils/crypto";
 
 interface FileGridProps {
   files: SharedFile[];
@@ -52,6 +57,17 @@ export default function FileGrid({
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeQrFile, setActiveQrFile] = useState<SharedFile | null>(null);
+
+  // Password-locked share unlock states
+  const [unlockingFile, setUnlockingFile] = useState<SharedFile | null>(null);
+  const [unlockCode, setUnlockCode] = useState("");
+  const [unlockError, setUnlockError] = useState("");
+  const [pendingAction, setPendingAction] = useState<{
+    file: SharedFile;
+    type: "preview" | "download" | "qr" | "copy" | "delete";
+    event?: React.MouseEvent;
+  } | null>(null);
+  const [unlockedFiles, setUnlockedFiles] = useState<Record<string, SharedFile>>({});
 
   // Keep current time updated every second for countdowns
   useEffect(() => {
@@ -83,8 +99,104 @@ export default function FileGrid({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   };
 
+  const performAction = (file: SharedFile, type: string, e?: React.MouseEvent) => {
+    const activeFile = unlockedFiles[file.id] || file;
+    switch (type) {
+      case "preview":
+        onPreview(activeFile);
+        break;
+      case "download":
+        onDownload(activeFile);
+        break;
+      case "qr":
+        setActiveQrFile(activeFile);
+        break;
+      case "copy":
+        if (e) handleCopyLink(activeFile, e);
+        break;
+      case "delete":
+        onDelete(activeFile);
+        break;
+    }
+  };
+
+  const handleActionClick = (file: SharedFile, type: "preview" | "download" | "qr" | "copy" | "delete", e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    
+    // If private and not yet unlocked
+    if (file.isPrivate && !unlockedFiles[file.id]) {
+      setUnlockingFile(file);
+      setUnlockCode("");
+      setUnlockError("");
+      setPendingAction({ file, type, event: e });
+    } else {
+      performAction(file, type, e);
+    }
+  };
+
+  const handleUnlockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!unlockingFile || !unlockCode.trim()) return;
+
+    try {
+      const enteredHash = await hashSecretCode(unlockCode);
+      if (unlockingFile.secretCodeHash && enteredHash !== unlockingFile.secretCodeHash) {
+        setUnlockError("Incorrect secret code. Access denied.");
+        return;
+      }
+
+      // Decrypt the download URL and text content if any
+      const decryptedUrl = await decryptText(unlockingFile.downloadUrl, unlockCode);
+      let decryptedTextContent = "";
+      if (unlockingFile.isText && unlockingFile.textContent) {
+        decryptedTextContent = await decryptText(unlockingFile.textContent, unlockCode);
+      }
+
+      const decryptedFile: SharedFile = {
+        ...unlockingFile,
+        downloadUrl: decryptedUrl,
+        textContent: decryptedTextContent || undefined,
+      };
+
+      setUnlockedFiles((prev) => ({
+        ...prev,
+        [unlockingFile.id]: decryptedFile,
+      }));
+
+      // Close modal
+      setUnlockingFile(null);
+      setUnlockCode("");
+      setUnlockError("");
+
+      // Trigger the pending action
+      if (pendingAction) {
+        performAction(decryptedFile, pendingAction.type, pendingAction.event);
+        setPendingAction(null);
+      }
+      addToast("Share successfully unlocked!", "success");
+    } catch (err) {
+      console.error("Unlock failed:", err);
+      setUnlockError("Decryption failed. Please check your secret code.");
+    }
+  };
+
   // Helper to get matching Lucide icon and color
   const getFileIcon = (file: SharedFile) => {
+    if (file.isPrivate && !unlockedFiles[file.id]) {
+      return {
+        icon: <Lock className="w-5 h-5 text-indigo-500 animate-pulse" />,
+        bg: "bg-indigo-50 dark:bg-indigo-950/10"
+      };
+    }
+    if (file.isPrivate && unlockedFiles[file.id]) {
+      return {
+        icon: <Unlock className="w-5 h-5 text-emerald-500" />,
+        bg: "bg-emerald-50 dark:bg-emerald-950/10"
+      };
+    }
     if (file.isText) {
       return {
         icon: <FileText className="w-5 h-5 text-blue-500" />,
@@ -374,15 +486,15 @@ export default function FileGrid({
                     >
                       {/* Top Row: Icon, Title & Actions */}
                       <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div className={`p-3 rounded-xl ${fileIconInfo.bg} shrink-0`}>
                             {fileIconInfo.icon}
                           </div>
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <h4
                               className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate pr-1 cursor-pointer hover:text-blue-500 transition-colors"
-                              onClick={() => onPreview(file)}
-                              title="Click to preview file"
+                              onClick={() => handleActionClick(file, "preview")}
+                              title={file.isPrivate && !unlockedFiles[file.id] ? "Click to unlock file" : "Click to preview file"}
                             >
                               {file.filename}
                             </h4>
@@ -392,12 +504,24 @@ export default function FileGrid({
                           </div>
                         </div>
 
-                        {/* Owner Badge / Action Drop */}
-                        {isOwner && (
-                          <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 rounded-md shrink-0">
-                            Uploader
-                          </span>
-                        )}
+                        {/* Badges */}
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          {isOwner && (
+                            <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 rounded-md shrink-0">
+                              Uploader
+                            </span>
+                          )}
+                          {file.isPrivate && (
+                            <span className={`text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shrink-0 ${
+                              unlockedFiles[file.id]
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                                : "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+                            }`}>
+                              {unlockedFiles[file.id] ? <Unlock className="w-2.5 h-2.5" /> : <Lock className="w-2.5 h-2.5" />}
+                              <span>{unlockedFiles[file.id] ? "Unlocked" : "Private"}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Expiry Tracker Card */}
@@ -415,7 +539,7 @@ export default function FileGrid({
                       <div className="grid grid-cols-5 gap-1.5 mt-auto">
                         <button
                           id={`preview-btn-${file.id}`}
-                          onClick={() => onPreview(file)}
+                          onClick={() => handleActionClick(file, "preview")}
                           className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all text-[11px] font-semibold cursor-pointer"
                           title="Preview File"
                         >
@@ -423,7 +547,7 @@ export default function FileGrid({
                         </button>
                         <button
                           id={`download-btn-${file.id}`}
-                          onClick={() => onDownload(file)}
+                          onClick={() => handleActionClick(file, "download")}
                           className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all text-[11px] font-semibold cursor-pointer"
                           title="Download File"
                         >
@@ -431,7 +555,7 @@ export default function FileGrid({
                         </button>
                         <button
                           id={`qr-btn-${file.id}`}
-                          onClick={() => setActiveQrFile(file)}
+                          onClick={() => handleActionClick(file, "qr")}
                           className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all text-[11px] font-semibold cursor-pointer"
                           title="Share QR Code"
                         >
@@ -439,7 +563,7 @@ export default function FileGrid({
                         </button>
                         <button
                           id={`copy-btn-${file.id}`}
-                          onClick={(e) => handleCopyLink(file, e)}
+                          onClick={(e) => handleActionClick(file, "copy", e)}
                           className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all text-[11px] font-semibold cursor-pointer relative"
                           title="Copy Link"
                         >
@@ -451,7 +575,7 @@ export default function FileGrid({
                         </button>
                         <button
                           id={`delete-btn-${file.id}`}
-                          onClick={() => onDelete(file)}
+                          onClick={() => handleActionClick(file, "delete")}
                           className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer transition-all text-[11px] font-semibold"
                           title="Delete File Permanently"
                         >
@@ -487,12 +611,29 @@ export default function FileGrid({
                           {fileIconInfo.icon}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h4
-                            className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate cursor-pointer hover:text-blue-500 transition-colors pr-4"
-                            onClick={() => onPreview(file)}
-                          >
-                            {file.filename}
-                          </h4>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4
+                              className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate cursor-pointer hover:text-blue-500 transition-colors"
+                              onClick={() => handleActionClick(file, "preview")}
+                            >
+                              {file.filename}
+                            </h4>
+                            {isOwner && (
+                              <span className="text-[8px] font-bold tracking-wider uppercase px-1 py-0.2 bg-blue-100 text-blue-700 dark:bg-blue-950/45 dark:text-blue-300 rounded shrink-0">
+                                Uploader
+                              </span>
+                            )}
+                            {file.isPrivate && (
+                              <span className={`text-[8px] font-bold tracking-wider uppercase px-1.5 py-0.2 rounded flex items-center gap-0.5 shrink-0 ${
+                                unlockedFiles[file.id]
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-300"
+                                  : "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/45 dark:text-indigo-300"
+                              }`}>
+                                {unlockedFiles[file.id] ? <Unlock className="w-2 h-2" /> : <Lock className="w-2 h-2" />}
+                                <span>{unlockedFiles[file.id] ? "Unlocked" : "Private"}</span>
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
                             <span>{formatBytes(file.size)}</span>
                             <span>•</span>
@@ -514,7 +655,7 @@ export default function FileGrid({
                         <div className="flex items-center gap-1.5">
                           <button
                             id={`row-preview-btn-${file.id}`}
-                            onClick={() => onPreview(file)}
+                            onClick={() => handleActionClick(file, "preview")}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
                             title="Preview File"
                           >
@@ -522,7 +663,7 @@ export default function FileGrid({
                           </button>
                           <button
                             id={`row-download-btn-${file.id}`}
-                            onClick={() => onDownload(file)}
+                            onClick={() => handleActionClick(file, "download")}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
                             title="Download File"
                           >
@@ -530,7 +671,7 @@ export default function FileGrid({
                           </button>
                           <button
                             id={`row-qr-btn-${file.id}`}
-                            onClick={() => setActiveQrFile(file)}
+                            onClick={() => handleActionClick(file, "qr")}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer"
                             title="Share QR Code"
                           >
@@ -538,7 +679,7 @@ export default function FileGrid({
                           </button>
                           <button
                             id={`row-copy-btn-${file.id}`}
-                            onClick={(e) => handleCopyLink(file, e)}
+                            onClick={(e) => handleActionClick(file, "copy", e)}
                             className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer relative"
                             title="Copy Link"
                           >
@@ -550,7 +691,7 @@ export default function FileGrid({
                           </button>
                           <button
                             id={`row-delete-btn-${file.id}`}
-                            onClick={() => onDelete(file)}
+                            onClick={() => handleActionClick(file, "delete")}
                             className="p-1.5 rounded-lg border border-rose-100 hover:border-rose-200 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/15 cursor-pointer transition-colors"
                             title="Delete File Permanently"
                           >
@@ -575,6 +716,91 @@ export default function FileGrid({
           addToast={addToast}
         />
       )}
+
+      {/* Unlock Private Share Modal Overlay */}
+      <AnimatePresence>
+        {unlockingFile && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800/80 p-6 shadow-2xl flex flex-col gap-5 overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/30 text-indigo-500">
+                  <Lock className="w-6 h-6 animate-pulse" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                    Unlock Private Share
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate mt-0.5">
+                    {unlockingFile.filename}
+                  </p>
+                </div>
+              </div>
+
+              {/* Form */}
+              <form onSubmit={handleUnlockSubmit} className="flex flex-col gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                    Secret Access Code
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      autoFocus
+                      required
+                      placeholder="Type code here..."
+                      value={unlockCode}
+                      onChange={(e) => {
+                        setUnlockCode(e.target.value.replace(/\s+/g, ""));
+                        setUnlockError("");
+                      }}
+                      className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-slate-700 dark:text-slate-200 font-mono text-sm focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder-slate-400"
+                    />
+                    <Key className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                  </div>
+                  {unlockError && (
+                    <motion.p
+                      initial={{ opacity: 0, y: -2 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-[10px] text-rose-500 font-bold flex items-center gap-1 mt-1"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                      <span>{unlockError}</span>
+                    </motion.p>
+                  )}
+                </div>
+
+                <div className="flex gap-2.5 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnlockingFile(null);
+                      setUnlockCode("");
+                      setUnlockError("");
+                      setPendingAction(null);
+                    }}
+                    className="flex-1 py-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/30 text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-500/15 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>Unlock & Open</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
