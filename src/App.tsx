@@ -32,6 +32,7 @@ import {
   Trash2
 } from "lucide-react";
 
+import { processFileForUpload } from "./utils/compress";
 import { db, storage, auth } from "./firebase/config";
 import { SharedFile, ActiveUpload, Theme } from "./types";
 import { encryptText, hashSecretCode } from "./utils/crypto";
@@ -231,24 +232,33 @@ export default function App() {
   };
 
   // 4. File upload processor
-  const handleFilesSelected = (selectedFiles: FileList, isPrivate: boolean = false, secretCode: string = "") => {
+  const handleFilesSelected = async (selectedFiles: FileList, isPrivate: boolean = false, secretCode: string = "") => {
     if (!user) {
       addToast("Connection offline. Please wait.", "error");
       return;
     }
 
-    Array.from(selectedFiles).forEach((file) => {
+    const filePromises = Array.from(selectedFiles).map(async (originalFile) => {
       // Security: Validate file size (Max 10GB)
-      if (file.size > 10737418240) {
-        addToast(`"${file.name}" exceeds the maximum limit of 10GB!`, "error");
+      if (originalFile.size > 10737418240) {
+        addToast(`"${originalFile.name}" exceeds the maximum limit of 10GB!`, "error");
         return;
       }
 
-      // Generate a unique file ID
       const uploadId = crypto.randomUUID();
       
-      startFileUpload(file, uploadId, isPrivate, secretCode);
+      try {
+        // Pre-process: client-side file compression
+        const processedFile = await processFileForUpload(originalFile);
+        startFileUpload(processedFile, uploadId, isPrivate, secretCode);
+      } catch (err) {
+        console.error("Error processing file:", err);
+        // Fallback to original file if compression somehow throws an unhandled error
+        startFileUpload(originalFile, uploadId, isPrivate, secretCode);
+      }
     });
+
+    await Promise.all(filePromises);
   };
 
   const startFileUpload = (file: File, uploadId: string, isPrivate: boolean = false, secretCode: string = "") => {
@@ -256,8 +266,8 @@ export default function App() {
 
     console.debug(`[UploadLifecycle:${uploadId}] Initializing startFileUpload. File: ${file.name}, Size: ${file.size} bytes.`);
 
-    // Determine if file is large (>= 100MB) where fallback uploads are guaranteed to fail due to API limits
-    const IS_LARGE_FILE = file.size >= 100 * 1024 * 1024;
+    // Determine if file is large (>= 2GB) where fallback uploads are guaranteed to fail due to API limits
+    const IS_LARGE_FILE = file.size >= 2000 * 1024 * 1024;
 
     // Create unique storage path
     // Format: uploads/fileId/filename
@@ -273,6 +283,7 @@ export default function App() {
     const uploadTask = uploadBytesResumable(storageRef, file, {
       customMetadata: {
         uploaderUid: user.uid,
+        chunkSize: "10485760", // 10MB optimal chunk size hint to reduce request overhead
       },
     });
 
@@ -362,16 +373,19 @@ export default function App() {
         fallbackXhr = new XMLHttpRequest();
         fallbackXhr.open("POST", "https://tmpfiles.org/api/v1/upload", true);
 
-        // Track local upload progress with integer-based throttling
+        // Track local upload progress with time-based throttling
         let lastFallbackProgress = 0;
+        let lastFallbackTime = 0;
         fallbackXhr.upload.addEventListener("progress", (event) => {
           if (fallbackCompletedOrCancelled) return;
           if (event.lengthComputable) {
             const progress = Math.round((event.loaded / event.total) * 100);
             const roundedProgress = Math.min(progress, 99);
-            console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles progress: ${progress}%`);
-            if (roundedProgress > lastFallbackProgress) {
+            const now = Date.now();
+            if (now - lastFallbackTime > 500 || roundedProgress === 99) {
+              lastFallbackTime = now;
               lastFallbackProgress = roundedProgress;
+              console.debug(`[UploadLifecycle:${uploadId}] Fallback tmpfiles progress: ${progress}%`);
               setActiveUploads((prev) =>
                 prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
               );
@@ -427,16 +441,19 @@ export default function App() {
         fallbackXhr = new XMLHttpRequest();
         fallbackXhr.open("POST", "https://file.io/?expires=1d", true);
 
-        // Track local upload progress with integer-based throttling
+        // Track local upload progress with time-based throttling
         let lastFileIoProgress = 0;
+        let lastFileIoTime = 0;
         fallbackXhr.upload.addEventListener("progress", (event) => {
           if (fallbackCompletedOrCancelled) return;
           if (event.lengthComputable) {
             const progress = Math.round((event.loaded / event.total) * 100);
             const roundedProgress = Math.min(progress, 99);
-            console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io progress: ${progress}%`);
-            if (roundedProgress > lastFileIoProgress) {
+            const now = Date.now();
+            if (now - lastFileIoTime > 500 || roundedProgress === 99) {
+              lastFileIoTime = now;
               lastFileIoProgress = roundedProgress;
+              console.debug(`[UploadLifecycle:${uploadId}] Fallback file.io progress: ${progress}%`);
               setActiveUploads((prev) =>
                 prev.map((u) => (u.id === uploadId ? { ...u, progress: roundedProgress } : u))
               );
@@ -553,54 +570,58 @@ export default function App() {
 
     // Listen to primary Firebase Storage state changes
     let lastProgress = 0;
+    let lastUpdateTime = 0;
     uploadTask.on(
       "state_changed",
       (snapshot) => {
         const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
         const roundedProgress = Math.min(Math.round(progress), 99);
         const currentState = snapshot.state; // 'paused' | 'running'
+        const now = Date.now();
         
-        console.debug(`[UploadLifecycle:${uploadId}] uploadTask state_changed: State: ${currentState}, Transferred ${snapshot.bytesTransferred}/${snapshot.totalBytes} (${progress.toFixed(2)}%). primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
         if (primaryCompletedOrCancelled) return;
         if (progress > 0) {
           hasProgressed = true;
           if (progressTimeout) {
-            console.debug(`[UploadLifecycle:${uploadId}] Progress detected (>0%). Clearing progressTimeout.`);
             clearTimeout(progressTimeout);
             progressTimeout = null;
           }
         }
         
         // Update state if progress increased or state changed
-        setActiveUploads((prev) =>
-          prev.map((u) => {
-            if (u.id !== uploadId) return u;
-            const updatedStatus = currentState === "paused" ? "paused" : "uploading";
-            const newProgress = roundedProgress > u.progress ? roundedProgress : u.progress;
-            if (u.progress !== newProgress || u.status !== updatedStatus) {
-              return {
-                ...u,
-                progress: newProgress,
-                status: updatedStatus,
-              };
-            }
-            return u;
-          })
-        );
+        // Throttled by 500ms to prevent heavy React re-renders on fast network
+        if (now - lastUpdateTime > 500 || currentState === "paused" || roundedProgress === 99) {
+          lastUpdateTime = now;
+          setActiveUploads((prev) =>
+            prev.map((u) => {
+              if (u.id !== uploadId) return u;
+              const updatedStatus = currentState === "paused" ? "paused" : "uploading";
+              const newProgress = roundedProgress > u.progress ? roundedProgress : u.progress;
+              if (u.progress !== newProgress || u.status !== updatedStatus) {
+                return {
+                  ...u,
+                  progress: newProgress,
+                  status: updatedStatus,
+                };
+              }
+              return u;
+            })
+          );
+        }
       }
     );
 
-    // Timeout: Only configure fallback timeout for files < 100MB.
+    // Timeout: Only configure fallback timeout for files < 2GB.
     // Large files take time to negotiate connections and will crash the external API fallbacks.
     if (!IS_LARGE_FILE) {
-      console.debug(`[UploadLifecycle:${uploadId}] Setting progressTimeout for 10 seconds.`);
+      console.debug(`[UploadLifecycle:${uploadId}] Setting progressTimeout for 3 seconds.`);
       progressTimeout = setTimeout(() => {
-        console.debug(`[UploadLifecycle:${uploadId}] progressTimeout triggered after 10s. hasProgressed: ${hasProgressed}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
+        console.debug(`[UploadLifecycle:${uploadId}] progressTimeout triggered after 3s. hasProgressed: ${hasProgressed}, primaryCompletedOrCancelled: ${primaryCompletedOrCancelled}`);
         if (!hasProgressed && !primaryCompletedOrCancelled) {
-          console.info(`[FastUpload] 10s timeout reached without progress. Transitioning to fallback...`);
+          console.info(`[FastUpload] 3s timeout reached without progress. Transitioning to fallback...`);
           startFallbackUpload();
         }
-      }, 10000);
+      }, 3000);
     } else {
       console.debug(`[UploadLifecycle:${uploadId}] Large file detected (${(file.size / 1024 / 1024).toFixed(1)}MB). Timeout-based fallback disabled.`);
     }
