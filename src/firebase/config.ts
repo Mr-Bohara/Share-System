@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { initializeFirestore } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAuth } from "firebase/auth";
 
@@ -19,8 +19,11 @@ const databaseId = "ai-studio-a27d6130-c443-4832-8d80-83d1012e39bc";
 // Initialize Firebase App
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore targeting the custom databaseId with forced long polling for connectivity
+// Initialize Firestore targeting the custom databaseId with offline-first persistence and forced long polling
 const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
   experimentalForceLongPolling: true,
 }, databaseId);
 
