@@ -58,6 +58,12 @@ export default function FileGrid({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [activeQrFile, setActiveQrFile] = useState<SharedFile | null>(null);
 
+  // Hidden file retrieval
+  const [showSecretPortal, setShowSecretPortal] = useState(false);
+  const [secretRetrievalCode, setSecretRetrievalCode] = useState("");
+  const [foundHiddenFiles, setFoundHiddenFiles] = useState<SharedFile[]>([]);
+  const [retrievalError, setRetrievalError] = useState("");
+
   // Password-locked share unlock states
   const [unlockingFile, setUnlockingFile] = useState<SharedFile | null>(null);
   const [unlockCode, setUnlockCode] = useState("");
@@ -183,6 +189,54 @@ export default function FileGrid({
     }
   };
 
+  const handleRetrieveHiddenFiles = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!secretRetrievalCode.trim()) return;
+
+    try {
+      const codeHash = await hashSecretCode(secretRetrievalCode);
+      const matches = files.filter(f => f.isHidden && f.secretCodeHash === codeHash);
+
+      if (matches.length > 0) {
+        // Automatically "unlock" them in the UI state as well for convenience
+        const newlyUnlocked: Record<string, SharedFile> = {};
+        
+        for (const file of matches) {
+          try {
+            const decryptedUrl = await decryptText(file.downloadUrl, secretRetrievalCode);
+            let decryptedTextContent = "";
+            if (file.isText && file.textContent) {
+              decryptedTextContent = await decryptText(file.textContent, secretRetrievalCode);
+            }
+            
+            newlyUnlocked[file.id] = {
+              ...file,
+              downloadUrl: decryptedUrl,
+              textContent: decryptedTextContent || undefined
+            };
+          } catch (e) {
+            console.error("Auto-decrypt failed for hidden file:", e);
+          }
+        }
+
+        setUnlockedFiles(prev => ({ ...prev, ...newlyUnlocked }));
+        setFoundHiddenFiles(prev => {
+          const combined = [...prev, ...matches];
+          // Unique by ID
+          return Array.from(new Map(combined.map(f => [f.id, f])).values());
+        });
+        
+        setSecretRetrievalCode("");
+        setRetrievalError("");
+        addToast(`Found ${matches.length} hidden file(s)!`, "success");
+      } else {
+        setRetrievalError("No hidden files found with this secret code.");
+      }
+    } catch (err) {
+      setRetrievalError("Error searching for hidden files.");
+    }
+  };
+
   // Helper to get matching Lucide icon and color
   const getFileIcon = (file: SharedFile) => {
     if (file.isPrivate && !unlockedFiles[file.id]) {
@@ -284,7 +338,11 @@ export default function FileGrid({
     // 1. Skip expired files on frontend
     if (file.expiresAt <= currentTime) return false;
 
-    // 2. Search query match
+    // 2. Filter out hidden files unless they were explicitly found
+    const isExplicitlyFound = foundHiddenFiles.some(f => f.id === file.id);
+    if (file.isHidden && !isExplicitlyFound) return false;
+
+    // 3. Search query match
     const ext = file.filename.split(".").pop()?.toLowerCase() || "";
     const matchesSearch =
       file.filename.toLowerCase().includes(search.toLowerCase()) ||
@@ -389,8 +447,65 @@ export default function FileGrid({
                 <List className="w-4.5 h-4.5" />
               </button>
             </div>
+
+            {/* Secret Portal Trigger */}
+            <button
+              id="secret-portal-toggle-btn"
+              onClick={() => setShowSecretPortal(!showSecretPortal)}
+              className={`p-2.5 rounded-xl border transition-all shadow-xs cursor-pointer flex items-center gap-2 text-xs font-bold ${
+                showSecretPortal
+                  ? "bg-indigo-600 border-indigo-500 text-white shadow-indigo-500/20"
+                  : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500 dark:hover:border-indigo-500"
+              }`}
+              title="Access Hidden Files"
+            >
+              <Key className="w-4.5 h-4.5" />
+              <span className="hidden sm:inline">Access Hidden</span>
+            </button>
           </div>
         </div>
+
+        {/* Secret Portal Input Area */}
+        <AnimatePresence>
+          {showSecretPortal && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden"
+            >
+              <form 
+                onSubmit={handleRetrieveHiddenFiles}
+                className="p-4 rounded-2xl bg-indigo-50/30 dark:bg-indigo-950/10 border border-indigo-100/50 dark:border-indigo-900/30 flex flex-col sm:flex-row gap-3 items-center"
+              >
+                <div className="flex-1 w-full relative">
+                  <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-indigo-400" />
+                  <input
+                    type="text"
+                    placeholder="Enter Secret Code to reveal hidden files..."
+                    value={secretRetrievalCode}
+                    onChange={(e) => {
+                      setSecretRetrievalCode(e.target.value.replace(/\s+/g, ""));
+                      setRetrievalError("");
+                    }}
+                    className="w-full pl-10.5 pr-4 py-2.5 rounded-xl border border-indigo-200/50 dark:border-indigo-800/50 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-sm focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold transition-all shadow-md shadow-indigo-500/15"
+                >
+                  Retrieve Files
+                </button>
+                {retrievalError && (
+                  <p className="text-[10px] text-rose-500 font-bold sm:absolute sm:-bottom-5 sm:left-4">
+                    {retrievalError}
+                  </p>
+                )}
+              </form>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Categories / Filter Chips */}
         <div id="filter-chips-container" className="flex items-center gap-1.5 overflow-x-auto pb-1 pr-4 no-scrollbar">

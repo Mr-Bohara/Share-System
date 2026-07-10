@@ -11,6 +11,7 @@ export interface SharedFile {
   isText?: boolean;
   textContent?: string;
   isPrivate?: boolean;
+  isHidden?: boolean;
   secretCodeHash?: string;
 }
 

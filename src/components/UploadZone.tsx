@@ -5,9 +5,9 @@ import { ActiveUpload } from "../types";
 
 interface UploadZoneProps {
   activeUploads: ActiveUpload[];
-  onFilesSelected: (files: FileList, isPrivate: boolean, secretCode: string) => void;
+  onFilesSelected: (files: FileList, isPrivate: boolean, secretCode: string, isHidden: boolean) => void;
   onClearCompletedUploads: () => void;
-  onShareText: (text: string, title?: string, isPrivate?: boolean, secretCode?: string) => void;
+  onShareText: (text: string, title?: string, isPrivate?: boolean, secretCode?: string, isHidden?: boolean) => void;
 }
 
 export default function UploadZone({
@@ -22,6 +22,7 @@ export default function UploadZone({
   const [textTitle, setTextTitle] = useState("");
   const [isSubmittingText, setIsSubmittingText] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
+  const [isHidden, setIsHidden] = useState(false);
   const [secretCode, setSecretCode] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -41,14 +42,14 @@ export default function UploadZone({
     setIsDragActive(false);
     if (isPrivate && !secretCode.trim()) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFilesSelected(e.dataTransfer.files, isPrivate, secretCode);
+      onFilesSelected(e.dataTransfer.files, isPrivate, secretCode, isHidden);
     }
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (isPrivate && !secretCode.trim()) return;
     if (e.target.files && e.target.files.length > 0) {
-      onFilesSelected(e.target.files, isPrivate, secretCode);
+      onFilesSelected(e.target.files, isPrivate, secretCode, isHidden);
     }
   };
 
@@ -184,6 +185,26 @@ export default function UploadZone({
                 🔒 Files are encrypted on-the-fly. Decryption requires this exact code.
               </p>
             )}
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsHidden(!isHidden)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all cursor-pointer ${
+                  isHidden
+                    ? "bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 shadow-xs"
+                    : "bg-slate-50/50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500"
+                }`}
+              >
+                <div className={`w-8 h-4 rounded-full relative transition-colors ${isHidden ? "bg-indigo-500" : "bg-slate-300 dark:bg-slate-700"}`}>
+                  <motion.div
+                    animate={{ x: isHidden ? 18 : 2 }}
+                    className="absolute top-1 w-2 h-2 bg-white rounded-full shadow-sm"
+                  />
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Hide from Public List</span>
+              </button>
+            </div>
           </motion.div>
         )}
       </div>
@@ -316,7 +337,7 @@ export default function UploadZone({
                 if (!textContent.trim() || hasMissingCode) return;
                 setIsSubmittingText(true);
                 try {
-                  await onShareText(textContent, textTitle, isPrivate, secretCode);
+                  await onShareText(textContent, textTitle, isPrivate, secretCode, isHidden);
                   setTextContent("");
                   setTextTitle("");
                 } finally {

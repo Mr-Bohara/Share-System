@@ -168,7 +168,7 @@ export default function App() {
   }, [user]);
 
   // 4.5. Text share processor
-  const handleShareText = async (text: string, customTitle?: string, isPrivate?: boolean, secretCode?: string) => {
+  const handleShareText = async (text: string, customTitle?: string, isPrivate?: boolean, secretCode?: string, isHidden?: boolean) => {
     if (!user) {
       addToast("Connection offline. Please wait.", "error");
       return;
@@ -221,6 +221,7 @@ export default function App() {
         isText: true,
         textContent: textContent,
         isPrivate: !!isPrivate,
+        isHidden: !!isHidden,
         secretCodeHash: secretCodeHash || null,
       });
 
@@ -232,7 +233,7 @@ export default function App() {
   };
 
   // 4. File upload processor
-  const handleFilesSelected = async (selectedFiles: FileList, isPrivate: boolean = false, secretCode: string = "") => {
+  const handleFilesSelected = async (selectedFiles: FileList, isPrivate: boolean = false, secretCode: string = "", isHidden: boolean = false) => {
     if (!user) {
       addToast("Connection offline. Please wait.", "error");
       return;
@@ -250,18 +251,18 @@ export default function App() {
       try {
         // Pre-process: client-side file compression
         const processedFile = await processFileForUpload(originalFile);
-        startFileUpload(processedFile, uploadId, isPrivate, secretCode);
+        startFileUpload(processedFile, uploadId, isPrivate, secretCode, isHidden);
       } catch (err) {
         console.error("Error processing file:", err);
         // Fallback to original file if compression somehow throws an unhandled error
-        startFileUpload(originalFile, uploadId, isPrivate, secretCode);
+        startFileUpload(originalFile, uploadId, isPrivate, secretCode, isHidden);
       }
     });
 
     await Promise.all(filePromises);
   };
 
-  const startFileUpload = (file: File, uploadId: string, isPrivate: boolean = false, secretCode: string = "") => {
+  const startFileUpload = (file: File, uploadId: string, isPrivate: boolean = false, secretCode: string = "", isHidden: boolean = false) => {
     if (!user) return;
 
     console.debug(`[UploadLifecycle:${uploadId}] Initializing startFileUpload. File: ${file.name}, Size: ${file.size} bytes.`);
@@ -528,6 +529,7 @@ export default function App() {
           mimeType: file.type || "application/octet-stream",
           uploaderUid: user.uid,
           isPrivate: !!isPrivate,
+          isHidden: !!isHidden,
           secretCodeHash: secretCodeHash || null,
         });
 
