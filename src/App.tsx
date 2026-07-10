@@ -828,9 +828,12 @@ export default function App() {
         {/* Header Section */}
         <header id="app-header" className="flex items-center justify-between border-b border-slate-200/60 dark:border-slate-800/60 pb-6">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-linear-to-tr from-blue-500 to-indigo-600 rounded-xl text-white shadow-md shadow-indigo-500/10">
-              <FolderLock className="w-6 h-6" />
-            </div>
+            <img 
+              src="https://raw.githubusercontent.com/Mr-Bohara/FoodFest/main/FSS_Logo.png" 
+              alt="System Logo" 
+              className="w-11 h-11 object-contain rounded-xl shadow-xs"
+              referrerPolicy="no-referrer"
+            />
             <div>
               <h1 className="text-lg md:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
                 Temp Share
