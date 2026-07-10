@@ -10,7 +10,8 @@ import {
   query,
   doc,
   setDoc,
-  deleteDoc
+  deleteDoc,
+  getDocFromServer
 } from "firebase/firestore";
 import {
   ref,
@@ -775,11 +776,12 @@ export default function App() {
   // 7. Direct file downloads with force attachment
   const handleDownloadFile = async (file: SharedFile) => {
     try {
-      // Check if it's a data URL (e.g. text notes)
+      // 1. Handle Data URLs (Text Notes)
       if (file.downloadUrl.startsWith("data:")) {
         const link = document.createElement("a");
         link.href = file.downloadUrl;
-        link.setAttribute("download", file.filename);
+        link.download = file.filename;
+        link.style.display = "none";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -789,42 +791,25 @@ export default function App() {
 
       addToast(`Preparing direct download for "${file.filename}"...`, "info");
 
-      // Fetch the file bytes as a blob to bypass cross-origin restrictions on the a[download] attribute
-      const res = await fetch(file.downloadUrl);
-      if (!res.ok) throw new Error("Could not fetch file contents");
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-
+      // 2. Direct single-click proxy download
+      // Since all non-data URLs might be cross-origin or have restricted headers (such as tmpfiles),
+      // we route them through our same-origin /api/download proxy. This avoids CORS restrictions and
+      // guarantees a direct download in the same tab without any redirect or external landing pages.
+      const proxyUrl = `/api/download?url=${encodeURIComponent(file.downloadUrl)}&filename=${encodeURIComponent(file.filename)}`;
+      
       const link = document.createElement("a");
-      link.href = blobUrl;
-      link.setAttribute("download", file.filename);
+      link.href = proxyUrl;
+      link.download = file.filename;
+      link.target = "_self"; // ensure same tab, no navigation away
+      link.style.display = "none";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-
-      // Clean up blob URL
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 1500);
-
+      
       addToast(`Downloaded "${file.filename}" successfully!`, "success");
     } catch (err) {
-      console.warn("Direct blob download failed, falling back to URL download:", err);
-      try {
-        // Fallback: Append response-content-disposition query parameter to force download on client
-        const url = new URL(file.downloadUrl);
-        url.searchParams.append("response-content-disposition", "attachment");
-
-        const link = document.createElement("a");
-        link.href = url.toString();
-        link.setAttribute("download", file.filename);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        addToast(`Initiated download for "${file.filename}"`, "success");
-      } catch (fallbackErr) {
-        window.open(file.downloadUrl, "_blank");
-      }
+      console.error("Download failed:", err);
+      addToast("Failed to download file.", "error");
     }
   };
 
